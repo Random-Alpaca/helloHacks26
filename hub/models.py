@@ -82,9 +82,16 @@ _WEIGHT_KEYWORDS: list[tuple[str, float]] = [
 ]
 _DEFAULT_WEIGHT = 0.05
 
+# Any of these override the weight match above - "optional exam prep" isn't
+# urgent just because it says "exam".
+_LOW_STAKES_KEYWORDS = ("optional", "ungraded", "practice", "bonus", "not collected", "no submission", "0%")
+_LOW_STAKES_WEIGHT = 0.01
+
 
 def _infer_weight(description: str) -> float:
     text = description.lower()
+    if any(keyword in text for keyword in _LOW_STAKES_KEYWORDS):
+        return _LOW_STAKES_WEIGHT
     for keyword, weight in _WEIGHT_KEYWORDS:
         if keyword in text:
             return weight

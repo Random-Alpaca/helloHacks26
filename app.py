@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 import streamlit as st
 
 from hub import canvas, db
-from hub.models import Course, Item, category_for
+from hub.logic import sort_items
+from hub.models import Course, Item, category_for, classify_urgency
 
 st.set_page_config(page_title="UBC Hub")
 st.title("UBC Hub")
@@ -41,12 +42,14 @@ for tab, category in zip(st.tabs(["All", "Tasks", "Deadlines", "Materials"]), [N
     with tab:
         # ponytail: overdue = due < now, computed here from the due string. Swap for the backend's
         # due-status field when it lands.
-        rows = [r for r in db.upcoming(conn, category) if not hide_overdue or datetime.fromisoformat(r[4]) >= now][:n]
+        rows = [r for r in db.upcoming(conn, category) if not hide_overdue or datetime.fromisoformat(r[4]) >= now]
+        rows = sort_items(rows, now)[:n]
         if not rows:
             st.info("Nothing upcoming." if demo else "Nothing yet. Connect Canvas in the sidebar.")
             continue
         st.dataframe(
-            [{"Due": datetime.fromisoformat(r[4]).astimezone(), "Course": r[0], "What": r[3], "Kind": r[2], "Link": r[5]}
+            [{"Urgency": classify_urgency(r[3], datetime.fromisoformat(r[4]), now).capitalize(),
+              "Due": datetime.fromisoformat(r[4]).astimezone(), "Course": r[0], "What": r[3], "Kind": r[2], "Link": r[5]}
              for r in rows],
             column_config={"Due": st.column_config.DatetimeColumn(format="ddd MMM D, h:mm a"),
                            "Link": st.column_config.LinkColumn(display_text="open")},
