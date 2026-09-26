@@ -26,6 +26,14 @@ def _canonical_code(code):
     faculty, number, _section = normalise_course_code(code)
     return f"{faculty} {number}" if faculty and number else code
 
+
+# ponytail: no migration for a hub.db that predates canonical course codes -
+# it's a hackathon demo, not a production rollout with real users' existing
+# data at stake. A pre-existing course row keeps its old raw code (e.g.
+# "CPSC 121 101 2026W1") until it's re-saved, so it can sit alongside a new
+# canonical row for the same real course. Delete ~/.ubc-hub/hub.db after
+# pulling this change; upgrade to a real migration if that ever isn't fine.
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS courses (
     id INTEGER PRIMARY KEY,
