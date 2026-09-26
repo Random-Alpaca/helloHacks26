@@ -27,6 +27,7 @@ END:VCALENDAR
 def test_parse_assignment_and_event():
     items = parse(FEED, source="canvas")
     assert [i.kind for i in items] == ["assignment", "event", "assignment"]
+    assert [i.category for i in items] == ["task", "deadline", "task"]
     assert items[0].course == "CPSC 121 101"
     assert items[0].title == "Quiz 2"
     assert items[0].due.day == 30

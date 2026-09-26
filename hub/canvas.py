@@ -11,11 +11,13 @@ import json
 from datetime import date, datetime, timedelta
 
 from hub import site
-from hub.models import Course, Item
+from hub.models import Course, Item, category_for
 
 BASE = "https://canvas.ubc.ca"
 SITE = "canvas"
-KINDS = {"announcement": "announcement", "calendar_event": "event"}  # everything else is work to do
+# Canvas's plannable_type -> our kind. Unlisted types (assignment, discussion_topic,
+# wiki_page, ...) default to "assignment": still a task, just not one we've named yet.
+KINDS = {"announcement": "announcement", "calendar_event": "event", "quiz": "quiz"}
 
 
 def unwrap(text):
@@ -36,9 +38,11 @@ def to_course(c):
 
 def to_item(p, course_codes):
     due = p.get("plannable_date")
+    kind = KINDS.get(p.get("plannable_type"), "assignment")
     return Item(
         course=course_codes.get(p.get("course_id"), p.get("context_name", "")),
-        kind=KINDS.get(p.get("plannable_type"), "assignment"),
+        category=category_for(kind),
+        kind=kind,
         title=(p.get("plannable") or {}).get("title", ""),
         due=datetime.fromisoformat(due) if due else None,
         url=BASE + p.get("html_url", ""),
@@ -74,9 +78,12 @@ def _run(req, start, end):
 
 
 if __name__ == "__main__":
+    from hub import db
+
     courses, items = fetch()
+    db.save(db.connect(), courses, items)  # persist so hub.db.upcoming() etc. can query it later
     for c in courses:
         print(f"{c.code:30} {c.grade if c.grade is not None else '-':>6}  {c.title}")
     print()
     for i in sorted(items, key=lambda i: (i.due is None, i.due or 0)):
-        print(f"{i.due:%a %b %d %H:%M}" if i.due else " " * 16, f"{i.kind:12} {i.course:20} {i.title}")
+        print(f"{i.due:%a %b %d %H:%M}" if i.due else " " * 16, f"{i.category:9} {i.kind:12} {i.course:20} {i.title}")
