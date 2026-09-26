@@ -18,3 +18,19 @@ jobs:
 
       - name: Run tests
         run: uv run pytest tests/ -v
+
+  deploy:
+    needs: pytest                      # only after tests pass
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npx --yes vercel@latest pull --yes --environment=production --token=$VERCEL_TOKEN
+      - run: npx --yes vercel@latest build --prod --token=$VERCEL_TOKEN
+      - run: npx --yes vercel@latest deploy --prebuilt --prod --token=$VERCEL_TOKEN
