@@ -15,7 +15,7 @@ limitations, not guessed:
 Try it:  uv run python -m hub.prairielearn
 """
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from bs4 import BeautifulSoup
 
@@ -24,6 +24,10 @@ from hub.models import Course, Item, category_for
 
 BASE = "https://us.prairielearn.com"
 SITE = "prairielearn"
+
+# UBC courses only ever show Pacific time. Fixed offsets, not zoneinfo/pytz:
+# good enough while every course we've seen is UBC; add zones if that changes.
+TZ_OFFSET = {"PST": -8, "PDT": -7}
 
 # PrairieLearn groups assessments under headings an instructor names freely
 # ("Programming Assignments", "Tutorial", ...); these are the ones we've seen
@@ -62,17 +66,21 @@ def to_course(ci_id, title):
 
 
 def due_from_popover(popover_html):
-    """The access-details popover's first row (100% credit) -> its end time.
-    None if there's no popover yet (assessment not open, see module docstring)."""
+    """The access-details popover's first row (100% credit) -> its end time,
+    timezone-aware (same as Canvas's due dates - never mix naive and aware
+    datetimes in the shared model). None if there's no popover yet (assessment
+    not open, see module docstring)."""
     if not popover_html:
         return None
     rows = BeautifulSoup(popover_html, "html.parser").select("tr")[1:]  # skip Credit/Start/End header
     if not rows:
         return None
     end = rows[0].select("td")[2].get_text(strip=True)  # "2026-09-27 23:59:59 (PDT)" or "—"
-    if end == "—":
+    m = re.match(r"(.+) \(([A-Z]+)\)$", end)
+    if not m:
         return None
-    return datetime.fromisoformat(re.sub(r"\s*\([A-Z]+\)$", "", end))
+    dt_str, tz = m.groups()
+    return datetime.fromisoformat(dt_str).replace(tzinfo=timezone(timedelta(hours=TZ_OFFSET.get(tz, 0))))
 
 
 def to_item(row, course_code, group):

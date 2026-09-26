@@ -38,8 +38,15 @@ def row(html):
 def test_open_assessment_gets_due_from_100pct_tier_and_a_link():
     i = to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments")
     assert (i.category, i.kind, i.title) == ("task", "assignment", "A Dictionary Client")
-    assert i.due.isoformat() == "2026-09-27T23:59:59"
+    assert i.due.isoformat() == "2026-09-27T23:59:59-07:00"  # PDT, timezone-aware like Canvas's due dates
     assert i.url == "https://us.prairielearn.com/pl/course_instance/221053/assessment_instance/14835025/"
+
+
+def test_due_is_never_naive():
+    # A naive due here would crash any code that compares it against
+    # datetime.now(timezone.utc) - e.g. Terrace's "Hide overdue" toggle.
+    i = to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments")
+    assert i.due.tzinfo is not None
 
 
 def test_not_yet_open_assessment_has_no_due_or_link():
