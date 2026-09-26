@@ -1,7 +1,25 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from hub.logic import dedupe, delete_item, normalise_course_code, sort_items
 from hub.models import Item, category_for
+
+NOW = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
+
+
+def row(title, due_offset_hours):
+    due = (NOW + timedelta(hours=due_offset_hours)).isoformat()
+    return ("CPSC 121", "task", "assignment", title, due, "https://x", None)
+
+
+def test_overdue_beats_everything():
+    rows = [row("Reading 4", 5), row("Final Exam", -1)]
+    assert sort_items(rows, NOW)[0][3] == "Final Exam"
+
+
+def test_critical_beats_low_even_if_further_out():
+    rows = [row("Optional practice quiz, 0%", 2), row("Final exam", 20)]
+    ordered = sort_items(rows, NOW)
+    assert ordered[0][3] == "Final exam"
 
 
 def _item(id, due=None, done=None):
@@ -40,16 +58,6 @@ def test_long_faculty_and_long_number():
 
 def test_unparseable_garbage():
     assert normalise_course_code("!!!") == (None, None, None)
-
-
-def test_sort_items_by_due_date_no_due_date_last():
-    soon = _item("soon", due=datetime(2026, 10, 1, tzinfo=timezone.utc))
-    later = _item("later", due=datetime(2026, 10, 15, tzinfo=timezone.utc))
-    no_due = _item("no_due")
-
-    result = sort_items([later, no_due, soon])
-
-    assert [item.title for item in result] == ["soon", "later", "no_due"]
 
 
 def test_delete_item_removes_only_matching_source_and_url():
