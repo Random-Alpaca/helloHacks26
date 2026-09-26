@@ -1,4 +1,11 @@
-from hub.logic import normalise_course_code
+from datetime import datetime, timezone
+
+from hub.logic import normalise_course_code, sort_items
+from hub.models import Item
+
+
+def _item(id, due=None):
+    return Item(id=id, course_key="c", kind="assignment", title=id, source="canvas", due=due)
 
 
 def test_full_code_with_term():
@@ -29,3 +36,13 @@ def test_long_faculty_and_long_number():
 
 def test_unparseable_garbage():
     assert normalise_course_code("!!!") == (None, None, None)
+
+
+def test_sort_items_by_due_date_no_due_date_last():
+    soon = _item("soon", due=datetime(2026, 10, 1, tzinfo=timezone.utc))
+    later = _item("later", due=datetime(2026, 10, 15, tzinfo=timezone.utc))
+    no_due = _item("no_due")
+
+    result = sort_items([later, no_due, soon])
+
+    assert [item.id for item in result] == ["soon", "later", "no_due"]

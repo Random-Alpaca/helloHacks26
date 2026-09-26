@@ -1,4 +1,7 @@
 import re
+from datetime import datetime, timezone
+
+_NO_DUE_DATE = datetime.max.replace(tzinfo=timezone.utc)
 
 _COURSE_CODE_RE = re.compile(
     r"^(?P<faculty>[a-z]{2,5})[ _-]?[a-z]*[ _-]*"
@@ -16,3 +19,7 @@ def normalise_course_code(text):
     number = match.group("number")
     section = match.group("section")
     return faculty, number, section
+
+
+def sort_items(items):
+    return sorted(items, key=lambda item: item.due or _NO_DUE_DATE)
