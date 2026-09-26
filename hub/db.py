@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS items (
     due TEXT,
     url TEXT NOT NULL,
     source TEXT NOT NULL,
+    done INTEGER,  -- NULL = unknown/not applicable; 0/1 otherwise. "overdue"/"soon" are never stored - see hub.models.status_of
     UNIQUE(source, url)
 );
 
@@ -54,6 +55,13 @@ def connect(path=PATH):
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    # CREATE TABLE IF NOT EXISTS doesn't add columns to a table that already
+    # exists - a hub.db from before `done` landed would crash on it (#27,
+    # #21) with "no such column: items.done". Guarded, so this is a no-op
+    # once every db has the column.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(items)")}
+    if "done" not in cols:
+        conn.execute("ALTER TABLE items ADD COLUMN done INTEGER")
     return conn
 
 
@@ -78,10 +86,11 @@ def save(conn, courses=(), items=(), textbooks=()):
     ids = {c.code: _course_id(conn, c) for c in courses}
     for i in items:
         conn.execute(
-            "INSERT INTO items (course_id, category, kind, title, due, url, source) VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "INSERT INTO items (course_id, category, kind, title, due, url, source, done) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(source, url) DO UPDATE SET category=excluded.category, kind=excluded.kind, "
-            "title=excluded.title, due=excluded.due",
-            (ids.get(i.course), i.category, i.kind, i.title, i.due.isoformat() if i.due else None, i.url, i.source),
+            "title=excluded.title, due=excluded.due, done=excluded.done",
+            (ids.get(i.course), i.category, i.kind, i.title, i.due.isoformat() if i.due else None, i.url, i.source,
+             None if i.done is None else int(i.done)),
         )
     for t in textbooks:
         cid = ids.get(t.course)
@@ -98,8 +107,11 @@ def save(conn, courses=(), items=(), textbooks=()):
 
 def upcoming(conn, category=None):
     """Items with a due date, soonest first, joined to their course code.
-    `category` filters to just "task"/"deadline"/"material" if given."""
-    q = ("SELECT courses.code, items.category, items.kind, items.title, items.due, items.url "
+    `category` filters to just "task"/"deadline"/"material" if given.
+    Row shape: (code, category, kind, title, due, url, done). `done` is
+    0/1/None as stored - build a Status ("overdue"/"soon"/...) from it and
+    `due` with hub.models.status_of, don't recompute the logic here."""
+    q = ("SELECT courses.code, items.category, items.kind, items.title, items.due, items.url, items.done "
          "FROM items JOIN courses ON courses.id = items.course_id "
          "WHERE items.due IS NOT NULL" + (" AND items.category = ?" if category else "") +
          " ORDER BY items.due")

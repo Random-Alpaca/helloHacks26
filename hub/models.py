@@ -1,6 +1,6 @@
 """Shared model every adapter returns. Keep it tiny (see issue #1)."""
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 Category = Literal["task", "deadline", "material"]
@@ -41,9 +41,80 @@ class Item:
     category: Category
     kind: str  # specific label within the category, e.g. "quiz", "reading" - free-form, new providers can add one without touching this file
     title: str
-    due: datetime | None
+    due: datetime | None  # always tz-aware if set - never mix naive and aware across adapters
     url: str
     source: str
+    done: bool | None = None  # completed/submitted, if the source can tell us. None = unknown/not applicable
+
+
+Status = Literal["done", "overdue", "soon", "upcoming"]
+SOON_WINDOW = timedelta(hours=48)  # matches docs/design.md's "due-in-48h" pinning/amber rule
+
+
+def status_of(item: Item, now: datetime | None = None) -> Status:
+    """Where an item sits right now. Never stored - "overdue"/"soon" are pure
+    functions of `due` vs `now`, recomputed on every read (hub.db doesn't
+    persist this), so it's never stale."""
+    now = now or datetime.now(timezone.utc)
+    if item.done:
+        return "done"
+    if item.due is None:
+        return "upcoming"
+    if item.due < now:
+        return "overdue"
+    if item.due - now <= SOON_WINDOW:
+        return "soon"
+    return "upcoming"
+
+
+Urgency = Literal["overdue", "critical", "high", "medium", "low"]
+
+# Keyword -> inferred grade weight, when Item has no explicit weight field yet
+# (see docs/design.md's urgency formula). First match wins; order matters.
+# ponytail: keyword list, not an NLP model - a hackathon demo doesn't have
+# training data to justify one. Upgrade to a learned classifier if false
+# positives on real syllabi show this heuristic is too coarse.
+_WEIGHT_KEYWORDS: list[tuple[str, float]] = [
+    ("final", 0.35), ("midterm", 0.25), ("exam", 0.25),
+    ("project", 0.15), ("essay", 0.15), ("paper", 0.15),
+    ("assignment", 0.08), ("homework", 0.08), ("problem set", 0.08),
+    ("quiz", 0.05), ("reading", 0.01),
+]
+_DEFAULT_WEIGHT = 0.05
+
+# Any of these override the weight match above - "optional exam prep" isn't
+# urgent just because it says "exam".
+_LOW_STAKES_KEYWORDS = ("optional", "ungraded", "practice", "bonus", "not collected", "no submission", "0%")
+_LOW_STAKES_WEIGHT = 0.01
+
+
+def _infer_weight(description: str) -> float:
+    text = description.lower()
+    if any(keyword in text for keyword in _LOW_STAKES_KEYWORDS):
+        return _LOW_STAKES_WEIGHT
+    for keyword, weight in _WEIGHT_KEYWORDS:
+        if keyword in text:
+            return weight
+    return _DEFAULT_WEIGHT
+
+
+def classify_urgency(description: str, due: datetime | None, now: datetime | None = None) -> Urgency:
+    """Urgency from free-text description + deadline, per docs/design.md's
+    `weight / hours_until_due` sketch. No due date -> "low"."""
+    if due is None:
+        return "low"
+    now = now or datetime.now(timezone.utc)
+    if due < now:
+        return "overdue"
+    hours = max((due - now).total_seconds() / 3600, 1)
+    score = _infer_weight(description) / hours
+    if score >= 0.03:
+        return "critical"
+    if score >= 0.008:
+        return "high"
+    if score >= 0.001:
+        return "medium"
+    return "low"
 
 
 @dataclass

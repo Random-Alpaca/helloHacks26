@@ -1,5 +1,7 @@
 # UBC Hub: design spec
 
+> **Palantir Gotham for students.** A provider-agnostic fusion layer: any number of information providers go into one shared model, and come out as one pane of glass. Canvas, Workday and the UBC Bookstore are the first three providers at UBC, not the product. Must extend to other ed-tech and other schools without touching the core. The binding version is the Mission section of [AGENTS.md](../AGENTS.md).
+
 Answers Jacky's design prompt ([handoff/jacky-design-prompt.md](handoff/jacky-design-prompt.md)). The API facts behind every decision are in [api-standards.md](api-standards.md), with sources. This is the founding doc for the build. Where it says **Decision**, change it here first, then in code.
 
 ---
@@ -16,13 +18,32 @@ What realistic integration looks like with what UBC gives students today:
 | Source | How we get it | Why |
 |---|---|---|
 | Canvas | The student signs in themselves in a browser window Hub opens (Playwright); Hub reuses that session to read the same `/api/v1` JSON Canvas's own pages use. The **.ics calendar feed** as a fallback | UBC no longer lets students create Personal Access Tokens |
-| Workday | The student uploads the **View My Courses** Excel export | API access needs UBC CIO approval, which isn't realistic for us |
+| Workday | The student uploads the **View My Courses** Excel export (schedule). **Billing and tuition due dates** are next, via a Workday export or statement upload **[unverified which export]** | API access needs UBC CIO approval, which isn't realistic for us |
 | Bookstore | Anonymous GETs on the textbook lookup plus Shopify `products.json` | Public, no login |
-| Gradescope, iClicker, WeBWorK, PrairieLearn | **Through Canvas**: their grades and due dates usually land in the Canvas gradebook or calendar via LTI | No student-accessible API |
+| **Syllabus** | The student uploads the syllabus (PDF, DOCX or pasted text). An LLM extracts every dated item (exams, due dates, readings, *where* and *how* to submit) into Items, each with an excerpt from the syllabus as a citation | **Real pain point:** one prof never put due dates on Canvas, and the PrairieLearn deadlines were only at the bottom of the syllabus. Canvas isn't the source of truth, and the syllabus often is |
+| UBC key dates | Public UBC academic calendar pages: add/drop, withdrawal, exam period, tuition due **[unverified URLs]** | Public, no login; the same for every student |
+| Gradescope, iClicker, WeBWorK, PrairieLearn | **Through Canvas** when the instructor wires it up (LTI). Otherwise **through the syllabus** provider | No student-accessible API |
 | Piazza, Ed, others | Later, per-source adapters (Ed has personal tokens; Piazza has none) | Instructor-dependent |
 | UBCGrades, UBCExplorer, RateMyProfessors | Later: course-selection season only | Not part of "this week" |
+| Lecture recordings and transcripts (Panopto, Kaltura) | Later, and only via official download buttons the student can already use | Behind CWL; see the scraping policy below |
+
+**Output, not just input: an iCal export.** Hub publishes one merged `.ics` file of every Item, which the student subscribes to from Apple, Google or Outlook Calendar. Most students already live in a calendar app. Hub feeding it is the cheapest way to become the daily habit.
 
 **Scraping policy:** we parse HTML only on public, logged-out pages (the Bookstore). Behind CWL we only read Canvas's JSON with the student's own session, never HTML, and we never see the CWL password.
+
+### Prior art we're building on
+
+These come from Terrace's own coursework tooling. We borrow the patterns; none of the personal course data is copied into this repo.
+- **Per-course `syllabus.md` plus a deadlines `.ics`.** Grading tables, dated schedules and reading lists were hand-transcribed into Markdown, and each course got a generated `.ics` of deadlines. This is exactly what the Syllabus provider and the iCal export automate.
+  - Lessons worth keeping: **stable UIDs** (`<course>-<item>@…`) with `SEQUENCE` bumps, so updates replace events instead of duplicating them. Put the **grade weight in the event title** ("Quiz 1 due (6.5% of final grade)"). Use two reminders (`VALARM` at −2 days and on the day).
+- **Canvas grades snapshots.** A Canvas Grades page transcribed into a table (assignment, group, due, submitted, score, MISSING). It confirms which fields students actually check: missing-work status matters as much as due dates.
+- **The `ics-from-appointments` agent skill.**
+  - **Always produce something useful**: extract what's there and never refuse on partial data.
+  - **Default the timezone** to `America/Vancouver` and note that it was assumed.
+  - **Follow RFC 5545**: escaping and line folding.
+  - **Dedupe** the same event arriving from two inputs.
+
+  These same rules govern the Syllabus provider and the export. Use the `icalendar` library (already a dependency) rather than a hand-rolled writer.
 
 ## 2. Core user flows
 
@@ -52,6 +73,12 @@ What realistic integration looks like with what UBC gives students today:
 - The Textbooks tab lists every required and recommended book across the student's sections.
 - Each book shows the new, used and digital price, and a store link where the ISBN matches.
 - The tab totals the required spend.
+
+### 4b. Syllabus drop: "What did Canvas miss?"
+
+- Upload a syllabus. Hub lists every dated item it found, each with the sentence it came from.
+- New ones (not already in Canvas) are highlighted: "3 PrairieLearn deadlines found only in the syllabus".
+- One click adds them to the dashboard and the iCal export.
 
 ### 5. Notification triage (later phase)
 
@@ -93,7 +120,7 @@ Why:
                 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Adapters.**
+**Adapters.** Adding a provider (Moodle, Brightspace…) means adding one adapter file. The layout is owned by the backend (Jacky); `hub/site.py` is the shared core for sites the student logs into themselves.
 - Each source is one file with one public function that returns shared-model objects, e.g. `canvas.fetch(start, end) -> (list[Course], list[Item])`.
 - Adapters know nothing about the UI, and the UI knows nothing about the sources.
 - That split lets the four of us work in parallel against `fixtures/`.
@@ -117,7 +144,7 @@ Why:
 
 ## 4. Data model
 
-**Decision:** three types, dataclasses in `hub/models.py`. Keep them small, and add fields only when a screen needs them.
+**`hub/models.py` is the source of truth**, owned by the backend (Jacky). The JSON below is the **proposed** fuller shape, including the whiteboard fields. Additions go through Jacky. Keep the model small, and add fields only when a screen needs them.
 
 ```json
 {
@@ -154,10 +181,43 @@ Why:
 ```
 
 **Field rules:**
-- **`kind`** is one of `assignment | quiz | exam | event | announcement`.
+- **`kind`** is one of `assignment | quiz | exam | reading | event | announcement | deadline | payment`. `deadline` covers admin dates like add/drop; `payment` covers tuition and fees.
+- **Where, how and weight** (from the whiteboard: "how to do, what to do, where to access"). These are optional `Item` fields:
+  - `platform`: where you do it (`"prairielearn"`, `"gradescope"`, `"canvas"`…), with `url` pointing there.
+  - `how`: a one-line submission instruction.
+  - `weight`: the share of the final grade, e.g. `0.065`.
+  - `evidence`: for inferred Items, the syllabus sentence they came from, so the student can check it.
 - **`course_key`** is the join key. It is the Bookstore/Workday section key, because it's the most specific. Canvas course names get mapped onto it by `logic.normalise_course_code()` (Sam's work), e.g. `"CPSC 121 101 2026W1"` becomes `"UBCV,2026W1,CPSC,CPSC121,101"`.
 - **`Item.id`** is `source:type:upstream_id`. Dedupe uses it, plus a (course, title, due) match when the same assignment arrives from both the API and the .ics feed.
 - **Times** are ISO 8601 with a timezone offset. Convert to `America/Vancouver` for display only.
+
+### Pipeline and storage
+
+**Providers → normalise to the shared model → store → rank → show the top N.**
+
+**Storage (proposed by Terrace; Jacky decides):** one SQLite file.
+- **Raw tables, one per provider** (`canvas_raw`, `bookstore_raw`, …), holding what each API returned. Re-normalise from these without refetching when a parser changes.
+- **Normalised tables shared by all providers** (`courses`, `items`, `textbooks`), with a `source` column. The cross-source join happens here, so these are not split per provider.
+
+### Ranking
+
+**MVP: sort by due date.** Items with no due date go last and done items are hidden. This is `logic.sort_items()` in #2.
+
+**Later: an urgency function** (jotted down, not built). It replaces the sort behind the same call, so the UI doesn't change:
+
+```
+if item.done:            exclude
+if due < now:            overdue → pinned to the top, most overdue first
+hours = max(due - now, 1 h)
+urgency = (weight or 0.01) / hours     # 30% midterm in 3 days outranks a 1% quiz tomorrow
+tiebreak: earlier due date
+```
+
+Open questions for when we build it:
+- Should effort or length (e.g. an essay vs a quiz) count?
+- Should an item that's already been submitted but isn't marked done sink?
+- Should heavy days get a boost?
+- Should the student be able to pin items?
 
 ## 5. Screens
 
