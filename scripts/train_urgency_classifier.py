@@ -17,21 +17,24 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
-TRAIN_PATH = FIXTURES / "synthetic_urgency.jsonl"
-TEST_PATH = FIXTURES / "synthetic_urgency_test.jsonl"
+# Title-only: what's actually available at inference time (a bare Canvas/
+# PrairieLearn/syllabus title, no description or stated weight). See the
+# Agent board (#15): the rich-description set below overstates accuracy.
+TRAIN_PATH = FIXTURES / "synthetic_urgency_titles_train.jsonl"
+TEST_PATH = FIXTURES / "synthetic_urgency_titles_test.jsonl"
 MODEL_PATH = FIXTURES / "urgency_classifier.joblib"
 
 
 def load(path: Path) -> tuple[list[str], list[float], list[str]]:
-    descriptions, days, labels = [], [], []
+    texts, days, labels = [], [], []
     for line in path.read_text().splitlines():
         if not line.strip():
             continue
         row = json.loads(line)
-        descriptions.append(row["description"])
+        texts.append(row.get("description") or row["title"])
         days.append(row["days_until_due"])
         labels.append(row["urgency"])
-    return descriptions, days, labels
+    return texts, days, labels
 
 
 def features(vectorizer: TfidfVectorizer, descriptions: list[str], days: list[float], fit: bool):
