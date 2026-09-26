@@ -1,5 +1,7 @@
 # UBC Hub: design spec
 
+> **Palantir Gotham for students.** A provider-agnostic fusion layer: any number of information providers go into one shared model, and come out as one pane of glass. Canvas, Workday and the UBC Bookstore are the first three providers at UBC, not the product. Must extend to other ed-tech and other schools without touching the core. The binding version is the Mission section of [AGENTS.md](../AGENTS.md).
+
 Answers Jacky's design prompt ([handoff/jacky-design-prompt.md](handoff/jacky-design-prompt.md)). The API facts behind every decision are in [api-standards.md](api-standards.md), with sources. This is the founding doc for the build. Where it says **Decision**, change it here first, then in code.
 
 ---
@@ -84,16 +86,16 @@ Why:
                 │  hub/models.py  Course · Item · Textbook  (the shared model, §4)          │
                 │        ▲                                                                  │
                 │  adapters:                                                                │
-                │   hub/canvas.py ──── HTTPS ───► canvas.ubc.ca /api/v1  (user's own token) │
-                │   hub/ics.py    ──── HTTPS ───► Canvas/Moodle .ics feed URL               │
-                │   hub/workday.py ◄── file upload (.xlsx)                                  │
-                │   hub/bookstore.py ─ HTTPS ───► the.bookstore.ubc.ca, bookstore.ubc.ca     │
+                │   hub/providers/canvas.py ─── HTTPS ───► canvas.ubc.ca /api/v1  (user's own token) │
+                │   hub/providers/ics.py    ─── HTTPS ───► Canvas/Moodle .ics feed URL               │
+                │   hub/providers/workday.py ◄─ file upload (.xlsx)                                  │
+                │   hub/providers/bookstore.py HTTPS ───► the.bookstore.ubc.ca, bookstore.ubc.ca     │
                 │        │                                                                  │
                 │  cache: st.cache_data (in-memory, TTL)                                    │
                 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Adapters.**
+**Providers (adapters).** Every source lives in `hub/providers/`, and adding Moodle or Brightspace means adding one file there.
 - Each source is one file with one public function that returns shared-model objects, e.g. `canvas.fetch(token) -> (list[Course], list[Item])`.
 - Adapters know nothing about the UI, and the UI knows nothing about the sources.
 - That split lets the four of us work in parallel against `fixtures/`.
