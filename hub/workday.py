@@ -23,12 +23,10 @@ def _course_from_listing(listing, term):
         return None
 
     return Course(
-        key=f"UBCV,{term},{faculty},{faculty}{number},{section}",
         code=f"{faculty} {number}",
         section=section,
         term=term,
         title=title.strip() or listing,
-        sources=["workday"],
     )
 
 

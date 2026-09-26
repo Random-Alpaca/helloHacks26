@@ -4,7 +4,12 @@ version = "0.1.0"
 description = "Single pane of glass for UBC: Canvas, Workday, and the UBC Bookstore"
 requires-python = ">=3.12"
 dependencies = [
+    "streamlit",
+    "requests",
+    "beautifulsoup4",
     "openpyxl",
+    "icalendar",
+    "playwright>=1.63.0",
 ]
 
 [dependency-groups]

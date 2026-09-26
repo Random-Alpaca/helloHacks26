@@ -14,8 +14,6 @@ def test_fields_from_first_row():
     assert cpsc121.section == "001"
     assert cpsc121.term == "2026W1"
     assert cpsc121.title == "Models of Computation"
-    assert cpsc121.key == "UBCV,2026W1,CPSC,CPSC121,001"
-    assert cpsc121.sources == ["workday"]
 
 
 def test_missing_section_still_parses():
