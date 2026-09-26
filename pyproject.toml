@@ -9,7 +9,7 @@ dependencies = [
     "beautifulsoup4",
     "openpyxl",
     "icalendar",
-    "canvasapi",
+    "playwright>=1.63.0",
 ]
 
 [dependency-groups]
@@ -17,3 +17,6 @@ dev = ["pytest"]
 
 [tool.uv]
 package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
