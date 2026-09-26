@@ -7,7 +7,7 @@ Standing instructions for any coding agent (Claude Code, Codex, Copilot, Cursor�
 **Palantir Gotham for students.** One pane of glass that fuses every information provider in a student's life into one picture: what's due, where to be, what to buy, what's at risk.
 
 1. **It's a platform, not a Canvas tool.** At UBC the first providers are **Canvas, Workday and the UBC Bookstore**. They are the first three, not the product. The product has to take on more ed-tech providers (Moodle, Brightspace, Blackboard, Google Classroom, Piazza, Ed, Gradescope…) and other schools without touching the core.
-2. **Providers are plugins.** Each provider is one adapter in `hub/providers/<name>.py` that turns its data into the shared model (`Course`, `Item`, `Textbook` in `hub/models.py`). Adding a provider means adding one file. `hub/logic.py` and the UI must never import or special-case a specific provider.
+2. **Providers are plugins.** Each provider is one adapter module that turns its data into the shared model (`Course`, `Item`, `Textbook` in `hub/models.py`). Adding a provider means adding one adapter file. Sites the student logs into themselves reuse the shared core in `hub/site.py`. `hub/logic.py` and the UI must never import or special-case a specific provider.
 3. **The shared model is the ontology.** Fusion, matching across sources, dedupe, sorting and risk flags all happen on the shared model, never on raw provider data. That cross-source join is the product.
 4. **How you access a provider is an implementation detail.** For Canvas, the API token, the `.ics` feed and the Playwright path are all options inside the Canvas adapter. None of them is the architecture. If your work only makes sense for one provider, it belongs in that provider's adapter.
 
@@ -30,7 +30,7 @@ This team mixes experience levels. Pitch your help to the person, not the task.
 | Person | GitHub | Experience | Owns | Branch |
 |---|---|---|---|---|
 | Terrace | `terraceonhigh` | 3rd year | PM, frontend (app shell, pages, wiring), reviews | `terrace` |
-| Jacky | `Random-Alpaca` | 3rd year | Canvas adapter (#1), README on `main`, reviews | `jacky` |
+| Jacky | `Random-Alpaca` | 3rd year | **Backend lead**: adapters, `hub/site.py`, `hub/models.py`, backend layout. README on `main`, reviews | `jacky` |
 | Sam | `SamLidder` | 1st year, brand new to GitHub | Core logic (#2) | `sam` |
 | Vihaan | `itsvihaanshah` | 1st year, just met Homebrew | Exploration tasks (#3 tracker, #4-#11); UI pieces slot into Terrace's frontend | `vihaan` |
 
@@ -65,6 +65,7 @@ git switch <your-branch>
 
 # 5. Install Python + dependencies (first run takes a minute)
 uv sync
+uv run playwright install chromium   # the browser Hub opens so you can log in to Canvas yourself
 
 # 6. Run the app: it opens at http://localhost:8501
 uv run streamlit run app.py
@@ -99,7 +100,7 @@ When an issue is done, open a PR from your branch into `main` (`gh pr create`) a
    - The repo is **public**. If a secret gets committed, tell Terrace immediately and revoke it in Canvas. Deleting the commit is not enough.
 4. **Only use your own data.** Canvas API policy forbids collecting other people's tokens. Test with your own token or with `fixtures/`.
 5. **Be polite to the Bookstore.** Only public, logged-out pages. Cache per term, and never hammer it in a loop. Never touch cart, checkout or account pages.
-6. **Never scrape anything behind CWL login.**
+6. **Behind CWL:** the student logs in themselves in the browser window Hub opens. Hub reads only the site's JSON with that session (never its HTML), never sees the password, and keeps the session only on that laptop (`~/.ubc-hub/`, mode 600), never in the repo. HTML scraping is for public, logged-out pages only.
 
 ## Agent coordination protocol
 
@@ -121,17 +122,16 @@ Several agents work in this repo at once, each run by a different person on a di
 app.py              Streamlit entry point (UI only, no fetching or parsing logic here)
 hub/models.py       Course, Item, Textbook dataclasses: the shared model (docs/design.md §4)
 hub/logic.py        normalise, match course codes, dedupe, sort, clashes (pure functions)
-hub/providers/      one file per information provider (the plugin boundary):
-  canvas.py         Canvas: API token or Playwright (all Canvas options live here)
-  ics.py            any .ics calendar feed (Canvas, Moodle, ...): generic, reused by many LMSs
-  workday.py        Workday .xlsx import
-  bookstore.py      Bookstore textbook lookup + Shopify product match
-  moodle.py, ...    future providers: add a file, touch nothing else
+hub/site.py         shared core for "student logs in themselves" sites: login, saved session, pagination, 429 backoff
+hub/canvas.py       Canvas adapter (browser session → /api/v1 JSON)
+hub/ics.py          any .ics calendar feed (Canvas, Moodle, ...)
+hub/<provider>.py   future providers: add a file, touch nothing else
 fixtures/           sample JSON/.xlsx/.ics/.html for tests and UI work (fake data only)
 tests/test_*.py     pytest tests
 ```
 
-- **Everything speaks the shared model.** Each provider module exposes `NAME` (e.g. `"canvas"`) and one public `fetch(...)` returning `Course`, `Item` and/or `Textbook` objects, each tagged with `source=NAME`. The UI and logic never see raw API JSON or HTML, and never branch on a provider name.
+- **The backend layout is Jacky's call.** The block above mirrors `main`; if they differ, the code wins. Ask Jacky or their agent (Agent board #15) before adding backend modules or changing `hub/models.py` or `hub/site.py`.
+- **Everything speaks the shared model.** Each adapter has one public `fetch(...)` returning `Course`, `Item` and/or `Textbook` objects, each with its `source` set. The UI and logic never see raw API JSON or HTML, and never branch on a provider name.
 - **Create files when your issue needs them.** Don't scaffold the whole layout up front.
 - **Keep it plain.** Use functions and dataclasses; avoid class hierarchies, frameworks-on-frameworks and new dependencies without asking the team. Add dependencies with `uv add <package>`, never `pip install`.
 - **Handle failure without crashing the dashboard.** When a source breaks, return `[]` plus an error status; the UI shows "unavailable".

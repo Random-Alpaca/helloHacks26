@@ -17,7 +17,7 @@ What realistic integration looks like with what UBC gives students today:
 
 | Source | How we get it | Why |
 |---|---|---|
-| Canvas | The student's own Personal Access Token → REST API; the **.ics calendar feed** as a fallback | The only official API a student can reach themselves |
+| Canvas | The student signs in themselves in a browser window Hub opens (Playwright); Hub reuses that session to read the same `/api/v1` JSON Canvas's own pages use. The **.ics calendar feed** as a fallback | UBC no longer lets students create Personal Access Tokens |
 | Workday | The student uploads the **View My Courses** Excel export (schedule). **Billing and tuition due dates** are next, via a Workday export or statement upload **[unverified which export]** | API access needs UBC CIO approval, which isn't realistic for us |
 | Bookstore | Anonymous GETs on the textbook lookup plus Shopify `products.json` | Public, no login |
 | **Syllabus** | The student uploads the syllabus (PDF, DOCX or pasted text). An LLM extracts every dated item (exams, due dates, readings, *where* and *how* to submit) into Items, each with an excerpt from the syllabus as a citation | **Real pain point:** one prof never put due dates on Canvas, and the PrairieLearn deadlines were only at the bottom of the syllabus. Canvas isn't the source of truth, and the syllabus often is |
@@ -29,7 +29,7 @@ What realistic integration looks like with what UBC gives students today:
 
 **Output, not just input: an iCal export.** Hub publishes one merged `.ics` file of every Item, which the student subscribes to from Apple, Google or Outlook Calendar. Most students already live in a calendar app. Hub feeding it is the cheapest way to become the daily habit.
 
-**Scraping policy:** we scrape only public, logged-out pages (the Bookstore). We never scrape behind CWL.
+**Scraping policy:** we parse HTML only on public, logged-out pages (the Bookstore). Behind CWL we only read Canvas's JSON with the student's own session, never HTML, and we never see the CWL password.
 
 ### Prior art we're building on
 
@@ -51,7 +51,7 @@ These come from Terrace's own coursework tooling. We borrow the patterns; none o
 
 1. Open Hub and go to Setup.
 2. Upload the Workday .xlsx. Hub shows "Found 5 courses: CPSC 121 101, …".
-3. Paste the Canvas token, or the Calendar Feed URL for no-token mode.
+3. Click "Connect Canvas" and sign in with CWL + Duo in the window that opens, or paste the Calendar Feed URL instead.
 4. Hub looks up textbooks for each section automatically.
 5. Land on the dashboard.
 
@@ -98,7 +98,7 @@ Why:
 - **One language** for a team with two first-years.
 - Streamlit turns plain Python into a web UI, with no JavaScript, build step or separate API server.
 - **The server-side fetch comes free.** Canvas and the Bookstore both block cross-origin browser calls (CORS), so a pure frontend couldn't call them anyway. Streamlit runs Python on the server, so the calls just work.
-- Mature libraries cover every source: `canvasapi`, `icalendar`, `openpyxl`, `requests`, `beautifulsoup4`.
+- Mature libraries cover every source: `playwright`, `icalendar`, `openpyxl`, `requests`, `beautifulsoup4`.
 - Mobile: Streamlit's layout is responsive enough for a demo. A native or PWA app is a Phase 3 question.
 
 ```
@@ -111,17 +111,17 @@ Why:
                 │  hub/models.py  Course · Item · Textbook  (the shared model, §4)          │
                 │        ▲                                                                  │
                 │  adapters:                                                                │
-                │   hub/providers/canvas.py ─── HTTPS ───► canvas.ubc.ca /api/v1  (user's own token) │
-                │   hub/providers/ics.py    ─── HTTPS ───► Canvas/Moodle .ics feed URL               │
-                │   hub/providers/workday.py ◄─ file upload (.xlsx)                                  │
-                │   hub/providers/bookstore.py HTTPS ───► the.bookstore.ubc.ca, bookstore.ubc.ca     │
+                │   hub/canvas.py ──── HTTPS ───► canvas.ubc.ca /api/v1  (user's own session)│
+                │   hub/ics.py    ──── HTTPS ───► Canvas/Moodle .ics feed URL               │
+                │   hub/workday.py ◄── file upload (.xlsx)                                  │
+                │   hub/bookstore.py ─ HTTPS ───► the.bookstore.ubc.ca, bookstore.ubc.ca     │
                 │        │                                                                  │
                 │  cache: st.cache_data (in-memory, TTL)                                    │
                 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Providers (adapters).** Every source lives in `hub/providers/`, and adding Moodle or Brightspace means adding one file there.
-- Each source is one file with one public function that returns shared-model objects, e.g. `canvas.fetch(token) -> (list[Course], list[Item])`.
+**Adapters.** Adding a provider (Moodle, Brightspace…) means adding one adapter file. The layout is owned by the backend (Jacky); `hub/site.py` is the shared core for sites the student logs into themselves.
+- Each source is one file with one public function that returns shared-model objects, e.g. `canvas.fetch(start, end) -> (list[Course], list[Item])`.
 - Adapters know nothing about the UI, and the UI knows nothing about the sources.
 - That split lets the four of us work in parallel against `fixtures/`.
 
@@ -130,7 +130,7 @@ Why:
 | Option | Verdict |
 |---|---|
 | OAuth (Canvas developer key) | The right answer for a multi-user release. Needs UBC to issue a key plus a Privacy Impact Assessment through LT Hub. Phase 2. |
-| Student's own token or feed URL, kept in the session only | **The MVP.** Allowed for single-user use of your own token. Never written to disk or logged. |
+| Student's own browser session or feed URL | **The MVP.** The student logs in themselves; the Canvas session is saved only on their machine at `~/.ubc-hub/canvas-state.json` (mode 600), never in the repo, never logged. |
 | Credential vault holding CWL passwords | **No.** It's a honeypot of UBC identities and a policy breach. |
 | Session-cookie proxying of CWL | **No.** It breaks the moment CWL or Duo changes, and is the worst ToS and privacy exposure. |
 
@@ -144,7 +144,7 @@ Why:
 
 ## 4. Data model
 
-**Decision:** three types, dataclasses in `hub/models.py`. Keep them small, and add fields only when a screen needs them.
+**`hub/models.py` is the source of truth**, owned by the backend (Jacky). The JSON below is the **proposed** fuller shape, including the whiteboard fields. Additions go through Jacky. Keep the model small, and add fields only when a screen needs them.
 
 ```json
 {
@@ -218,7 +218,7 @@ Why:
 
 | Phase | Scope | Needs |
 |---|---|---|
-| **0: Hackathon (now)** | Workday .xlsx import, Canvas PAT and .ics, Bookstore textbooks, the This week / Courses / Textbooks / Setup screens | Nothing from UBC |
+| **0: Hackathon (now)** | Workday .xlsx import, Canvas via browser session and .ics, Bookstore textbooks, the This week / Courses / Textbooks / Setup screens | Nothing from UBC |
 | **1: Polish** | Week calendar, clash detection, announcements feed, Moodle .ics (for UBCO or other schools), Ed personal token | Nothing from UBC |
 | **2: Multi-user** | Hosted deployment, Canvas OAuth developer key, accounts, encrypted per-user settings | UBC LT Hub: developer key and PIA |
 | **3: Full vision** | Course-selection search (UBCGrades, UBCExplorer), notifications and push, PWA or mobile app, official UBC endorsement, deeper Workday data (UBC API via the CIO's Integration Enablement Centre) | UBC partnership |
