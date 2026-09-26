@@ -89,7 +89,7 @@ git commit -m "Short description of what you did"
 git push
 ```
 
-When an issue is done, open a PR from your branch into `main` (`gh pr create`) and ask Jacky or Terrace to review. Mention the issue with `Closes #N` in the PR description.
+When an issue is done, open a PR from your branch into `main` (`gh pr create`) and ask Jacky or Terrace to review. **Attach real-endpoint screenshots first** (Jacky's standard, rule 9), or the PR won't merge. Mention the issue with `Closes #N` in the PR description.
 
 ## Rules that protect the repo
 
@@ -146,7 +146,15 @@ Every branch must meet this before its PR merges. Reviewers check it first.
 5. **Adapters persist via `db.save(conn, courses, items, textbooks)`**, and the UI reads via `db.upcoming()`, `db.by_course()` and `db.courses()`. Nothing else touches SQL.
 6. **Logged-in sites reuse `hub/site.py`** (login, session, pagination, 429 backoff). Don't write a second login flow.
 7. **Mark deliberate shortcuts** with a `# ponytail:` comment that names the limit and the upgrade path, as in `hub/db.py` and `hub/canvas.py`.
-8. **Tests are network-free** and `uv run pytest` is green before you push. Live verification against a real account is welcome, but it goes in the PR description, not in tests.
+8. **Tests are network-free** and `uv run pytest` is green before you push.
+9. **Merge gate: proven against a real endpoint** (Terrace's rule, enforced by Terrace's agent at review). No PR that touches data merges until **its author** posts **screenshots** in the PR showing it working against a real endpoint. That covers adapters, `hub/db.py`, `hub/logic.py`, the UI, and anything else that reads or shapes student data.
+   - **Real endpoint** means a live provider:
+     - UBC Canvas, PrairieLearn or the Bookstore with your own login, or
+     - the team's **self-hosted Canvas** (real Canvas LMS on Terrace's server; access via Terrace).
+     Saved fixtures and sample data do **not** count.
+   - **Code that doesn't call a provider itself** (`logic.py`, UI tabs): screenshot it running on data that came from a real endpoint, e.g. a `hub.db` filled by `canvas.fetch()`.
+   - **The screenshots show** the command or screen plus its output. Redact names, grades and anything else personal, and never show tokens, cookies or passwords.
+   - **Exempt:** docs, `AGENTS.md`, config, and test-only changes.
 
 - **The backend layout is Jacky's call.** The block above mirrors `main`; if they differ, the code wins. Ask Jacky or their agent (Agent board #15) before adding backend modules or changing `hub/models.py` or `hub/site.py`.
 - **Everything speaks the shared model.** Each adapter has one public `fetch(...)` returning `Course`, `Item` and/or `Textbook` objects, each with its `source` set. The UI and logic never see raw API JSON or HTML, and never branch on a provider name.
