@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from hub.logic import delete_item, flag, normalise_course_code, sort_items
+from hub.logic import dedupe, delete_item, flag, normalise_course_code, sort_items
 from hub.models import Item
 
 
@@ -84,3 +84,24 @@ def test_delete_item_removes_only_matching_id():
     items = [_item("a"), _item("b"), _item("c")]
     result = delete_item(items, "b")
     assert [item.id for item in result] == ["a", "c"]
+
+
+class _DedupeItem:
+    # Stand-in for whatever the real Item ends up being — dedupe() only
+    # needs .course, .title and .due, duck-typed, so it doesn't care.
+    def __init__(self, label, course, title, due):
+        self.label = label
+        self.course = course
+        self.title = title
+        self.due = due
+
+
+def test_dedupe_same_course_title_due_counts_as_one():
+    due = datetime(2026, 10, 2, 23, 59, tzinfo=timezone.utc)
+    from_canvas = _DedupeItem("canvas", "CPSC 121", "Problem Set 3", due)
+    from_ics = _DedupeItem("ics", "CPSC 121", "Problem Set 3", due)
+    different = _DedupeItem("other", "CPSC 121", "Problem Set 4", due)
+
+    result = dedupe([from_canvas, from_ics, different])
+
+    assert [item.label for item in result] == ["canvas", "other"]

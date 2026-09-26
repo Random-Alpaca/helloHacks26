@@ -41,3 +41,15 @@ def flag(item, now):
 
 def delete_item(items, item_id):
     return [item for item in items if item.id != item_id]
+
+
+def dedupe(items):
+    seen = set()
+    result = []
+    for item in items:
+        key = (item.course, item.title, item.due)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
