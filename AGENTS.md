@@ -18,10 +18,10 @@ This team mixes experience levels. Pitch your help to the person, not the task.
 
 | Person | GitHub | Experience | Owns | Branch |
 |---|---|---|---|---|
-| Terrace | `terraceonhigh` | 3rd year | Admin, repo owner, reviews | `terrace` |
+| Terrace | `terraceonhigh` | 3rd year | PM, frontend (app shell, pages, wiring), reviews | `terrace` |
 | Jacky | `Random-Alpaca` | 3rd year | Canvas adapter (#1), README on `main`, reviews | `jacky` |
 | Sam | `SamLidder` | 1st year, brand new to GitHub | Core logic (#2) | `sam` |
-| Vihaan | `itsvihaanshah` | 1st year, just met Homebrew | Exploration tasks (#3 tracker, #4-#11) | `vihaan` |
+| Vihaan | `itsvihaanshah` | 1st year, just met Homebrew | Exploration tasks (#3 tracker, #4-#11); UI pieces slot into Terrace's frontend | `vihaan` |
 
 **When working with Sam or Vihaan:**
 - Treat it as teaching. Explain each terminal command in one plain sentence before running it, and say what "success" looks like.
