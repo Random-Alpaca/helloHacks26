@@ -126,7 +126,7 @@ Several agents work in this repo at once, each run by a different person on a di
 app.py              Streamlit entry point (UI only, no fetching or parsing logic here)
 hub/models.py       Course, Item, Textbook dataclasses: THE shared model (Jacky's; design.md §4 is only a proposal)
 hub/db.py           SQLite storage (~/.ubc-hub/hub.db): save() upserts, upcoming(), courses(), by_course()
-hub/logic.py        normalise, match course codes, dedupe, sort, flags (pure functions, on Jacky's model)
+hub/logic.py        (planned, #2) normalise, match course codes, dedupe, sort, flags: pure functions on Jacky's model
 hub/site.py         shared core for "student logs in themselves" sites: login, saved session, pagination, 429 backoff
 hub/canvas.py       Canvas adapter (browser session → /api/v1 JSON)
 hub/ics.py          any .ics calendar feed (Canvas, Moodle, ...)
