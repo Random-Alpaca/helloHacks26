@@ -1,7 +1,7 @@
 # House standards (shared with terrace.zone and Comprador's site):
 # - Fonts are self-hosted from static/fonts/ (OFL-1.1, see NOTICES.md), with no font CDN.
-# - The palette comes from terrace.zone's style.css tokens, in light and dark.
-#   This is a placeholder until Terrace's landing-page design lands (#14).
+# - The palette is the Comprador theme (parchment, pomegranate accent, museum-teal
+#   links), using the exact contrast-checked hex values live on terrace.zone's style.css.
 
 [server]
 enableStaticServing = true
@@ -46,15 +46,17 @@ headingFont = "'IM Fell Double Pica SC', 'Bona Nova', Georgia, serif"
 codeFont = "'Syne Mono', ui-monospace, Menlo, monospace"
 
 [theme.light]
-primaryColor = "#3d6647"
-backgroundColor = "#f4f6f1"
-secondaryBackgroundColor = "#eceee9"
-textColor = "#111510"
-borderColor = "#cdd3c8"
+primaryColor = "#b84028"
+backgroundColor = "#f4ebe1"
+secondaryBackgroundColor = "#f6ebe5"
+textColor = "#281f1a"
+borderColor = "#e7d8d0"
+linkColor = "#3d6f7b"
 
 [theme.dark]
-primaryColor = "#7ab88a"
-backgroundColor = "#111510"
-secondaryBackgroundColor = "#191d16"
-textColor = "#dce3d6"
-borderColor = "#252c22"
+primaryColor = "#da7662"
+backgroundColor = "#211b17"
+secondaryBackgroundColor = "#2c2420"
+textColor = "#ebe0d6"
+borderColor = "#3d332e"
+linkColor = "#7bb3c1"
