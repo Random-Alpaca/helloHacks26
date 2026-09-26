@@ -11,7 +11,20 @@ Textbooks get their own table since they carry ISBN/price, not a due date.
 import sqlite3
 from pathlib import Path
 
+from hub.logic import normalise_course_code
+
 PATH = Path.home() / ".ubc-hub" / "hub.db"
+
+
+def _canonical_code(code):
+    """"CPSC 121", "CPSC 121 101 2026W1" and "cpsc121" all name the same
+    course - collapse every code to "FACULTY NUMBER" (section dropped: it's
+    schedule/clash data, not part of course identity) so Canvas's long code
+    and Workday's short one land on the same course row. Falls back to the
+    raw text when it doesn't parse, rather than silently dropping the
+    course."""
+    faculty, number, _section = normalise_course_code(code)
+    return f"{faculty} {number}" if faculty and number else code
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS courses (
@@ -66,34 +79,32 @@ def connect(path=PATH):
 
 
 def _course_id(conn, course):
+    code = _canonical_code(course.code)
     conn.execute(
         "INSERT INTO courses (code, term, title, grade) VALUES (?, ?, ?, ?) "
         "ON CONFLICT(code, term) DO UPDATE SET title=excluded.title, grade=excluded.grade",
-        (course.code, course.term, course.title, course.grade),
+        (code, course.term, course.title, course.grade),
     )
-    row = conn.execute("SELECT id FROM courses WHERE code=? AND term=?", (course.code, course.term)).fetchone()
+    row = conn.execute("SELECT id FROM courses WHERE code=? AND term=?", (code, course.term)).fetchone()
     return row[0]
 
 
 def save(conn, courses=(), items=(), textbooks=()):
-    """Upsert courses, then items/textbooks matched to them by course code.
-
-    # ponytail: text match on course code, not Sam's fuzzy course_key (#2).
-    # Fine while every item so far comes straight from Canvas, whose own
-    # items already agree with its own course codes; revisit once a second
-    # source (Workday, PrairieLearn) needs joining onto the same course.
-    """
-    ids = {c.code: _course_id(conn, c) for c in courses}
+    """Upsert courses, then items/textbooks matched to them by canonical
+    course code (see _canonical_code) - collapses Canvas's long code,
+    Workday's short one and PrairieLearn's onto the same course row."""
+    ids = {_canonical_code(c.code): _course_id(conn, c) for c in courses}
     for i in items:
         conn.execute(
             "INSERT INTO items (course_id, category, kind, title, due, url, source, done) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(source, url) DO UPDATE SET category=excluded.category, kind=excluded.kind, "
             "title=excluded.title, due=excluded.due, done=excluded.done",
-            (ids.get(i.course), i.category, i.kind, i.title, i.due.isoformat() if i.due else None, i.url, i.source,
+            (ids.get(_canonical_code(i.course)), i.category, i.kind, i.title,
+             i.due.isoformat() if i.due else None, i.url, i.source,
              None if i.done is None else int(i.done)),
         )
     for t in textbooks:
-        cid = ids.get(t.course)
+        cid = ids.get(_canonical_code(t.course))
         if cid is None:
             continue  # no matching course this call; skip rather than orphan the row
         conn.execute(
@@ -110,9 +121,16 @@ def upcoming(conn, category=None):
     `category` filters to just "task"/"deadline"/"material" if given.
     Row shape: (code, category, kind, title, due, url, done). `done` is
     0/1/None as stored - build a Status ("overdue"/"soon"/...) from it and
-    `due` with hub.models.status_of, don't recompute the logic here."""
-    q = ("SELECT courses.code, items.category, items.kind, items.title, items.due, items.url, items.done "
-         "FROM items JOIN courses ON courses.id = items.course_id "
+    `due` with hub.models.status_of, don't recompute the logic here.
+
+    LEFT JOIN, not JOIN: an item whose course didn't resolve at save() time
+    (e.g. Canvas connected before any course-giving source has run) must
+    still show up here - an INNER JOIN would silently vanish it instead of
+    just showing an unknown course, and "always produce something useful,
+    never refuse on partial data" is this repo's own stated rule."""
+    q = ("SELECT COALESCE(courses.code, '(unknown course)'), items.category, items.kind, items.title, "
+         "items.due, items.url, items.done "
+         "FROM items LEFT JOIN courses ON courses.id = items.course_id "
          "WHERE items.due IS NOT NULL" + (" AND items.category = ?" if category else "") +
          " ORDER BY items.due")
     return conn.execute(q, (category,) if category else ()).fetchall()
