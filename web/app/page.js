@@ -6,6 +6,7 @@ import {
   connectPrairieLearn,
   fetchCourses,
   fetchUpcoming,
+  isDone,
   isLocalMode,
   isOverdue,
   sortItems,
@@ -148,7 +149,11 @@ export default function Page() {
   }, []);
 
   const now = new Date();
-  const visible = sortItems(items)
+  // Completed items never show, regardless of Hide overdue (matches app.py's
+  // df2e178 rule) - filtered once here so it applies to every tab and the
+  // Courses tab's per-course lists alike.
+  const activeItems = items.filter((item) => !isDone(item));
+  const visible = sortItems(activeItems)
     .filter((item) => tab === "all" || tab === "courses" || item.category === tab)
     .filter((item) => !hideOverdue || !isOverdue(item, now))
     .slice(0, showN);
@@ -197,7 +202,7 @@ export default function Page() {
       )}
 
       {tab === "courses" ? (
-        <CoursesTab courses={courses} items={items} />
+        <CoursesTab courses={courses} items={activeItems} />
       ) : (
         <ItemsTable items={visible} />
       )}

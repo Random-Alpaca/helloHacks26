@@ -132,3 +132,11 @@ export function isOverdue(item, now) {
   if (item.done) return false;
   return item.due && new Date(item.due) < now;
 }
+
+// Completed items never show, regardless of Hide overdue - matches app.py's
+// df2e178 rule exactly. Prefer the backend's status; fall back to the raw
+// done flag if status hasn't arrived yet.
+export function isDone(item) {
+  if (item.status) return item.status === "done";
+  return Boolean(item.done);
+}
