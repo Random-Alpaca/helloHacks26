@@ -45,12 +45,15 @@ now = datetime.now(timezone.utc)
 
 for tab, category in zip(st.tabs(["All", "Tasks", "Deadlines", "Materials"]), [None, "task", "deadline", "material"]):
     with tab:
-        def overdue(r):
+        def status(r):
             item = Item(course=r[0], category=r[1], kind=r[2], title=r[3],
                         due=datetime.fromisoformat(r[4]), url=r[5], source="", done=bool(r[6]) if r[6] is not None else None)
-            return status_of(item, now) == "overdue"
+            return status_of(item, now)
 
-        rows = [r for r in db.upcoming(conn, category) if not hide_overdue or not overdue(r)]
+        # Completed items never show, regardless of the Hide overdue toggle -
+        # nothing left to do about them.
+        rows = [r for r in db.upcoming(conn, category)
+                if status(r) != "done" and (not hide_overdue or status(r) != "overdue")]
         rows = sort_items(rows, now)[:n]
         if not rows:
             st.info("Nothing upcoming." if demo else "Nothing yet. Connect Canvas in the sidebar.")
