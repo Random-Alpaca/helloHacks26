@@ -18,13 +18,32 @@ What realistic integration looks like with what UBC gives students today:
 | Source | How we get it | Why |
 |---|---|---|
 | Canvas | The student's own Personal Access Token → REST API; the **.ics calendar feed** as a fallback | The only official API a student can reach themselves |
-| Workday | The student uploads the **View My Courses** Excel export | API access needs UBC CIO approval, which isn't realistic for us |
+| Workday | The student uploads the **View My Courses** Excel export (schedule). **Billing and tuition due dates** are next, via a Workday export or statement upload **[unverified which export]** | API access needs UBC CIO approval, which isn't realistic for us |
 | Bookstore | Anonymous GETs on the textbook lookup plus Shopify `products.json` | Public, no login |
-| Gradescope, iClicker, WeBWorK, PrairieLearn | **Through Canvas**: their grades and due dates usually land in the Canvas gradebook or calendar via LTI | No student-accessible API |
+| **Syllabus** | The student uploads the syllabus (PDF, DOCX or pasted text). An LLM extracts every dated item (exams, due dates, readings, *where* and *how* to submit) into Items, each with an excerpt from the syllabus as a citation | **Real pain point:** one prof never put due dates on Canvas, and the PrairieLearn deadlines were only at the bottom of the syllabus. Canvas isn't the source of truth, and the syllabus often is |
+| UBC key dates | Public UBC academic calendar pages: add/drop, withdrawal, exam period, tuition due **[unverified URLs]** | Public, no login; the same for every student |
+| Gradescope, iClicker, WeBWorK, PrairieLearn | **Through Canvas** when the instructor wires it up (LTI). Otherwise **through the syllabus** provider | No student-accessible API |
 | Piazza, Ed, others | Later, per-source adapters (Ed has personal tokens; Piazza has none) | Instructor-dependent |
 | UBCGrades, UBCExplorer, RateMyProfessors | Later: course-selection season only | Not part of "this week" |
+| Lecture recordings and transcripts (Panopto, Kaltura) | Later, and only via official download buttons the student can already use | Behind CWL; see the scraping policy below |
+
+**Output, not just input: an iCal export.** Hub publishes one merged `.ics` file of every Item, which the student subscribes to from Apple, Google or Outlook Calendar. Most students already live in a calendar app. Hub feeding it is the cheapest way to become the daily habit.
 
 **Scraping policy:** we scrape only public, logged-out pages (the Bookstore). We never scrape behind CWL.
+
+### Prior art we're building on
+
+These come from Terrace's own coursework tooling. We borrow the patterns; none of the personal course data is copied into this repo.
+- **Per-course `syllabus.md` plus a deadlines `.ics`.** Grading tables, dated schedules and reading lists were hand-transcribed into Markdown, and each course got a generated `.ics` of deadlines. This is exactly what the Syllabus provider and the iCal export automate.
+  - Lessons worth keeping: **stable UIDs** (`<course>-<item>@…`) with `SEQUENCE` bumps, so updates replace events instead of duplicating them. Put the **grade weight in the event title** ("Quiz 1 due (6.5% of final grade)"). Use two reminders (`VALARM` at −2 days and on the day).
+- **Canvas grades snapshots.** A Canvas Grades page transcribed into a table (assignment, group, due, submitted, score, MISSING). It confirms which fields students actually check: missing-work status matters as much as due dates.
+- **The `ics-from-appointments` agent skill.**
+  - **Always produce something useful**: extract what's there and never refuse on partial data.
+  - **Default the timezone** to `America/Vancouver` and note that it was assumed.
+  - **Follow RFC 5545**: escaping and line folding.
+  - **Dedupe** the same event arriving from two inputs.
+
+  These same rules govern the Syllabus provider and the export. Use the `icalendar` library (already a dependency) rather than a hand-rolled writer.
 
 ## 2. Core user flows
 
@@ -54,6 +73,12 @@ What realistic integration looks like with what UBC gives students today:
 - The Textbooks tab lists every required and recommended book across the student's sections.
 - Each book shows the new, used and digital price, and a store link where the ISBN matches.
 - The tab totals the required spend.
+
+### 4b. Syllabus drop: "What did Canvas miss?"
+
+- Upload a syllabus. Hub lists every dated item it found, each with the sentence it came from.
+- New ones (not already in Canvas) are highlighted: "3 PrairieLearn deadlines found only in the syllabus".
+- One click adds them to the dashboard and the iCal export.
 
 ### 5. Notification triage (later phase)
 
@@ -156,7 +181,12 @@ Why:
 ```
 
 **Field rules:**
-- **`kind`** is one of `assignment | quiz | exam | event | announcement`.
+- **`kind`** is one of `assignment | quiz | exam | reading | event | announcement | deadline | payment`. `deadline` covers admin dates like add/drop; `payment` covers tuition and fees.
+- **Where, how and weight** (from the whiteboard: "how to do, what to do, where to access"). These are optional `Item` fields:
+  - `platform`: where you do it (`"prairielearn"`, `"gradescope"`, `"canvas"`…), with `url` pointing there.
+  - `how`: a one-line submission instruction.
+  - `weight`: the share of the final grade, e.g. `0.065`.
+  - `evidence`: for inferred Items, the syllabus sentence they came from, so the student can check it.
 - **`course_key`** is the join key. It is the Bookstore/Workday section key, because it's the most specific. Canvas course names get mapped onto it by `logic.normalise_course_code()` (Sam's work), e.g. `"CPSC 121 101 2026W1"` becomes `"UBCV,2026W1,CPSC,CPSC121,101"`.
 - **`Item.id`** is `source:type:upstream_id`. Dedupe uses it, plus a (course, title, due) match when the same assignment arrives from both the API and the .ics feed.
 - **Times** are ISO 8601 with a timezone offset. Convert to `America/Vancouver` for display only.
