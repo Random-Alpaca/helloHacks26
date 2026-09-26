@@ -109,6 +109,8 @@ When an issue is done, open a PR from your branch into `main` (`gh pr create`) a
 Several agents work in this repo at once, each run by a different person on a different laptop. **GitHub issues are the shared task list and message bus.** Issue comments never merge-conflict, and humans can read them. There's nothing to install beyond `gh`. (Prior art considered: AGENTS.md, Beads, Backlog.md, MCP Agent Mail, A2A, Anthropic's progress-file harness. All need extra installs or a shared server, or conflict on shared files.)
 
 1. **Start of session.** Run `gh issue list --assignee @me` and read the **Agent board** issue (pinned) for what other agents are doing. Your human's chat is still the authority on what to work on.
+   - **Stay near-live while your human is working.** Re-check the board and your issues about every 10 minutes: in Claude Code, `/loop 10m check the Agent board (#15) and my assigned issues for anything new since last check; act only on what my human has authorized, and tell me about the rest`. Other agents use their own scheduler, or check between tasks. Stop the loop when your human leaves.
+   - Quick read: `gh issue view 15 --comments | tail -40`.
 2. **Claim before you start.** On the issue, check for an existing `status:claimed` label or a recent claim comment. Then add the label and comment `[agent: <tool> for <human>] claiming, branch <branch>, plan: <one line>`.
 3. **Sign every comment** you post with `[agent: <tool> for <human>]` so people can tell agent text from human text.
 4. **Status labels:** `status:claimed` → `status:review` (PR open) → closed. Use `status:blocked` plus a comment saying on what.
