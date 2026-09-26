@@ -23,7 +23,12 @@ UBC Hub is a read-only dashboard that answers "what do I need to do this week?" 
 - **[docs/api-standards.md](docs/api-standards.md)** has every endpoint, auth rule and source. Check it before guessing at an API.
 - **GitHub issues** are the task list. Each person works from the issues assigned to them.
 
-Stack: **Python 3.12 + Streamlit**, managed with **uv**.
+Stack: **backend in Python 3.12** (managed with **uv**), **UI in Next.js (`web/`)**, deployed on **Vercel** by GitHub Actions.
+
+**The UI is `web/` (Terrace's decision, enforced).** Sam's Next.js app in `web/` is *the* product UI and the public site (https://hello-hacks26-terraceonhigh.vercel.app).
+- **All new UI work goes in `web/`.**
+- `app.py` (Streamlit) is **frozen**. It's the local live-demo harness for real Canvas + PrairieLearn logins until `web/` can read real data. Only fixes keep that demo working; no new features.
+- Don't start other UI directions (e.g. `jacky-ui-experiment`). A backend JSON API that feeds `web/` is fine, and that's Jacky's call.
 
 ## Who you might be working with
 
@@ -123,7 +128,8 @@ Several agents work in this repo at once, each run by a different person on a di
 ## Code layout and conventions
 
 ```
-app.py              Streamlit entry point (UI only, no fetching or parsing logic here)
+web/                THE UI: Next.js, deployed to Vercel via Actions (hosted = Sample data only for now)
+app.py              FROZEN Streamlit live-demo harness (real Canvas/PL on a laptop); fixes only
 hub/models.py       Course, Item, Textbook dataclasses: THE shared model (Jacky's; design.md §4 is only a proposal)
 hub/db.py           SQLite storage (~/.ubc-hub/hub.db): save() upserts, upcoming(), courses(), by_course()
 hub/logic.py        (planned, #2) normalise, match course codes, dedupe, sort, flags: pure functions on Jacky's model

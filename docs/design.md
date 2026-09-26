@@ -95,7 +95,9 @@ These come from Terrace's own coursework tooling. We borrow the patterns; none o
 
 ## 3. System architecture
 
-**Decision: Python + Streamlit, one repo, one process.**
+**Superseded 2026-09-26 (Terrace): the UI is Next.js in `web/`, deployed on Vercel. The backend stays Python.** The original reasoning below explains why Streamlit was the first pick. `app.py` survives as the frozen live-demo harness.
+
+~~**Decision: Python + Streamlit, one repo, one process.**~~
 
 Why:
 - **One language** for a team with two first-years.
