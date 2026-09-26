@@ -1,0 +1,62 @@
+# House standards (shared with terrace.zone and Comprador's site):
+# - Fonts are self-hosted from static/fonts/ (OFL-1.1, see NOTICES.md), with no font CDN.
+# - The palette is the Comprador theme (parchment, pomegranate accent, museum-teal
+#   links), using the exact contrast-checked hex values live on terrace.zone's style.css.
+
+[server]
+enableStaticServing = true
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[[theme.fontFaces]]
+family = "Bona Nova"
+url = "app/static/fonts/bona-nova-400.woff2"
+weight = 400
+style = "normal"
+
+[[theme.fontFaces]]
+family = "Bona Nova"
+url = "app/static/fonts/bona-nova-400italic.woff2"
+weight = 400
+style = "italic"
+
+[[theme.fontFaces]]
+family = "Bona Nova"
+url = "app/static/fonts/bona-nova-700.woff2"
+weight = 700
+style = "normal"
+
+[[theme.fontFaces]]
+family = "IM Fell Double Pica SC"
+url = "app/static/fonts/im-fell-double-pica-sc-400.woff2"
+weight = 400
+style = "normal"
+
+[[theme.fontFaces]]
+family = "Syne Mono"
+url = "app/static/fonts/syne-mono-400.woff2"
+weight = 400
+style = "normal"
+
+[theme]
+font = "'Bona Nova', Georgia, serif"
+headingFont = "'IM Fell Double Pica SC', 'Bona Nova', Georgia, serif"
+codeFont = "'Syne Mono', ui-monospace, Menlo, monospace"
+
+[theme.light]
+primaryColor = "#b84028"
+backgroundColor = "#f4ebe1"
+secondaryBackgroundColor = "#f6ebe5"
+textColor = "#281f1a"
+borderColor = "#e7d8d0"
+linkColor = "#3d6f7b"
+
+[theme.dark]
+primaryColor = "#da7662"
+backgroundColor = "#211b17"
+secondaryBackgroundColor = "#2c2420"
+textColor = "#ebe0d6"
+borderColor = "#3d332e"
+linkColor = "#7bb3c1"
