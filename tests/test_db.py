@@ -4,6 +4,7 @@ from hub import db
 from hub.models import Course, Item, Textbook
 
 COURSE = Course(code="CPSC 121", section="", term="2026W1", title="Models of Computation", grade=88.5)
+OTHER_COURSE = Course(code="ENGL 112", section="", term="2026W1", title="Strategies for University Writing")
 QUIZ = Item(course="CPSC 121", category="deadline", kind="quiz", title="Quiz 2",
             due=datetime(2026, 9, 30, 6, 59), url="https://x/q/1", source="canvas")
 BOOK = Textbook(course="CPSC 121", title="Discrete Math", isbn="123", required=True, price=80.0, url="https://x/b/1")
@@ -34,3 +35,15 @@ def test_upcoming_filters_by_category():
     db.save(conn, [COURSE], [QUIZ, reading])
     assert [r[2] for r in db.upcoming(conn, category="deadline")] == ["quiz"]
     assert [r[2] for r in db.upcoming(conn, category="material")] == ["reading"]
+
+
+def test_courses_and_by_course_grouping():
+    conn = db.connect(":memory:")
+    essay = Item(course="ENGL 112", category="task", kind="assignment", title="Essay 1",
+                 due=datetime(2026, 10, 1), url="https://x/e/1", source="canvas")
+    db.save(conn, [COURSE, OTHER_COURSE], [QUIZ, essay])
+    assert [c[0] for c in db.courses(conn)] == ["CPSC 121", "ENGL 112"]  # alphabetical, both present even though ENGL's item comes later
+    grouped = db.by_course(conn)
+    assert set(grouped) == {"CPSC 121", "ENGL 112"}
+    assert [row[3] for row in grouped["CPSC 121"]] == ["Quiz 2"]
+    assert [row[3] for row in grouped["ENGL 112"]] == ["Essay 1"]

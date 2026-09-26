@@ -104,3 +104,17 @@ def upcoming(conn, category=None):
          "WHERE items.due IS NOT NULL" + (" AND items.category = ?" if category else "") +
          " ORDER BY items.due")
     return conn.execute(q, (category,) if category else ()).fetchall()
+
+
+def courses(conn):
+    """Every course, e.g. for a Courses / Course-card screen."""
+    return conn.execute("SELECT code, term, title, grade FROM courses ORDER BY code").fetchall()
+
+
+def by_course(conn, category=None):
+    """upcoming(), grouped under each course code - what a Course card wants:
+    "this course's" tasks/deadlines/materials, each list still soonest-first."""
+    grouped = {}
+    for row in upcoming(conn, category):
+        grouped.setdefault(row[0], []).append(row)
+    return grouped
