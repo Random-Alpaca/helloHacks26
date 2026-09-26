@@ -11,6 +11,8 @@ Standing instructions for any coding agent (Claude Code, Codex, Copilot, Cursorâ
 3. **The shared model is the ontology.** Fusion, matching across sources, dedupe, sorting and risk flags all happen on the shared model, never on raw provider data. That cross-source join is the product.
 4. **How you access a provider is an implementation detail.** For Canvas, the API token, the `.ics` feed and the Playwright path are all options inside the Canvas adapter. None of them is the architecture. If your work only makes sense for one provider, it belongs in that provider's adapter.
 
+**Who decides what:** Jacky owns the data model (`hub/models.py`) and the backend. Terrace's whiteboard ([docs/handoff/terrace-whiteboard-2026-09-26.md](docs/handoff/terrace-whiteboard-2026-09-26.md)) owns the philosophy. When a model change is needed to serve the philosophy, propose it to Jacky; don't make it yourself.
+
 If a task seems to conflict with this section, this section wins. Stop and ask Terrace (PM).
 
 ## What we're building

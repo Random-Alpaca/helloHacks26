@@ -191,6 +191,34 @@ Why:
 - **`Item.id`** is `source:type:upstream_id`. Dedupe uses it, plus a (course, title, due) match when the same assignment arrives from both the API and the .ics feed.
 - **Times** are ISO 8601 with a timezone offset. Convert to `America/Vancouver` for display only.
 
+### Pipeline and storage
+
+**Providers → normalise to the shared model → store → rank → show the top N.**
+
+**Storage (proposed by Terrace; Jacky decides):** one SQLite file.
+- **Raw tables, one per provider** (`canvas_raw`, `bookstore_raw`, …), holding what each API returned. Re-normalise from these without refetching when a parser changes.
+- **Normalised tables shared by all providers** (`courses`, `items`, `textbooks`), with a `source` column. The cross-source join happens here, so these are not split per provider.
+
+### Ranking
+
+**MVP: sort by due date.** Items with no due date go last and done items are hidden. This is `logic.sort_items()` in #2.
+
+**Later: an urgency function** (jotted down, not built). It replaces the sort behind the same call, so the UI doesn't change:
+
+```
+if item.done:            exclude
+if due < now:            overdue → pinned to the top, most overdue first
+hours = max(due - now, 1 h)
+urgency = (weight or 0.01) / hours     # 30% midterm in 3 days outranks a 1% quiz tomorrow
+tiebreak: earlier due date
+```
+
+Open questions for when we build it:
+- Should effort or length (e.g. an essay vs a quiz) count?
+- Should an item that's already been submitted but isn't marked done sink?
+- Should heavy days get a boost?
+- Should the student be able to pin items?
+
 ## 5. Screens
 
 1. **Setup / Integrations**
