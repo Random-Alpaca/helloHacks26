@@ -1,16 +1,9 @@
-from hub.canvas import next_link, parse_json, to_course, to_item
+from hub.canvas import to_course, to_item, unwrap
 
 
-def test_parse_json_strips_guard():
-    assert parse_json('while(1);[{"id": 1}]') == [{"id": 1}]
-    assert parse_json('[]') == []
-
-
-def test_next_link():
-    h = '<https://canvas.ubc.ca/api/v1/courses?page=2>; rel="next", <https://canvas.ubc.ca/api/v1/courses?page=1>; rel="first"'
-    assert next_link(h) == "https://canvas.ubc.ca/api/v1/courses?page=2"
-    assert next_link('<x>; rel="last"') is None
-    assert next_link(None) is None
+def test_unwrap_strips_guard():
+    assert unwrap('while(1);[{"id": 1}]') == [{"id": 1}]
+    assert unwrap('[]') == []
 
 
 def test_mapping():
