@@ -1,0 +1,134 @@
+// Data layer for web/. Two modes, chosen by config (issue #31):
+//   - Local mode: NEXT_PUBLIC_HUB_API is set -> talk to Jacky's hub/api.py
+//     over http://127.0.0.1:<port>, which returns rows already ranked and
+//     annotated with status/urgency from hub.models (never recomputed here).
+//   - Sample mode (hosted Vercel default): no API reachable, fixed fake data.
+
+const URGENCY_ORDER = ["overdue", "critical", "high", "medium", "low"];
+
+export function apiBase() {
+  return process.env.NEXT_PUBLIC_HUB_API || null;
+}
+
+export function isLocalMode() {
+  return apiBase() !== null;
+}
+
+// Same 5 rows as app.py's sample_conn(), plus urgency/status precomputed
+// ONCE by actually running hub.models.classify_urgency()/status_of() against
+// them (see the reconciliation notes in this repo's history) - not
+// reimplemented here. These are frozen labels for illustration, not a live
+// computation, since we deliberately don't duplicate that logic in JS.
+const SAMPLE_ROWS = [
+  { course: "CPSC 121", title: "Problem Set 3", kind: "assignment", dueInDays: 2, urgency: "medium", status: "soon" },
+  { course: "CPSC 121", title: "Quiz 2", kind: "quiz", dueInDays: 4, urgency: "low", status: "upcoming" },
+  { course: "MATH 100", title: "Midterm 1", kind: "exam", dueInDays: 9, urgency: "medium", status: "upcoming" },
+  { course: "ENGL 110", title: "Read ch. 4", kind: "reading", dueInDays: 1, urgency: "medium", status: "soon" },
+  { course: "MATH 100", title: "WeBWorK 3", kind: "assignment", dueInDays: -1, urgency: "overdue", status: "overdue" },
+];
+
+const CATEGORY_FOR = {
+  assignment: "task",
+  announcement: "task",
+  quiz: "deadline",
+  exam: "deadline",
+  event: "deadline",
+  break: "deadline",
+  payment: "deadline",
+  reading: "material",
+  textbook: "material",
+};
+
+const SAMPLE_COURSES = [
+  { code: "CPSC 121", term: "2026W1", title: "Models of Computation", grade: 84.5 },
+  { code: "MATH 100", term: "2026W1", title: "Differential Calculus", grade: null },
+  { code: "ENGL 110", term: "2026W1", title: "Approaches to Literature", grade: null },
+];
+
+function sampleItems() {
+  const now = Date.now();
+  return SAMPLE_ROWS.map((row, i) => ({
+    id: i,
+    course: row.course,
+    category: CATEGORY_FOR[row.kind] ?? "task",
+    kind: row.kind,
+    title: row.title,
+    due: new Date(now + row.dueInDays * 24 * 60 * 60 * 1000).toISOString(),
+    url: `https://example.invalid/${i}`,
+    done: false,
+    urgency: row.urgency,
+    status: row.status,
+  }));
+}
+
+// Backend rows from hub/api.py don't have urgency/status yet (Jacky's part
+// of #31, still in progress) - normalise what's there, leave the rest
+// undefined rather than guess at it client-side.
+function normaliseApiItem(row, i) {
+  return {
+    id: i,
+    course: row.course,
+    category: row.category,
+    kind: row.kind,
+    title: row.title,
+    due: row.due,
+    url: row.url,
+    done: row.done ?? null,
+    urgency: row.urgency ?? undefined,
+    status: row.status ?? undefined,
+  };
+}
+
+export async function fetchUpcoming() {
+  const base = apiBase();
+  if (!base) return sampleItems();
+  const res = await fetch(`${base}/api/upcoming`);
+  if (!res.ok) throw new Error(`GET /api/upcoming failed: ${res.status}`);
+  const rows = await res.json();
+  return rows.map(normaliseApiItem);
+}
+
+export async function fetchCourses() {
+  const base = apiBase();
+  if (!base) return SAMPLE_COURSES;
+  const res = await fetch(`${base}/api/courses`);
+  if (!res.ok) throw new Error(`GET /api/courses failed: ${res.status}`);
+  return res.json();
+}
+
+export async function connectCanvas() {
+  const base = apiBase();
+  if (!base) throw new Error("connectCanvas() only works in local mode");
+  const res = await fetch(`${base}/api/connect/canvas`, { method: "POST" });
+  if (!res.ok) throw new Error(`POST /api/connect/canvas failed: ${res.status}`);
+  return res.json();
+}
+
+export async function connectPrairieLearn() {
+  const base = apiBase();
+  if (!base) throw new Error("connectPrairieLearn() only works in local mode");
+  const res = await fetch(`${base}/api/connect/prairielearn`, { method: "POST" });
+  if (!res.ok) throw new Error(`POST /api/connect/prairielearn failed: ${res.status}`);
+  return res.json();
+}
+
+// Sort by urgency (matches hub.logic.sort_items's order) when the backend
+// (or sample data) provides it; items without it yet (API not upgraded)
+// fall back to due-date order rather than a guessed urgency.
+export function sortItems(items) {
+  return [...items].sort((a, b) => {
+    const aRank = a.urgency ? URGENCY_ORDER.indexOf(a.urgency) : URGENCY_ORDER.length;
+    const bRank = b.urgency ? URGENCY_ORDER.indexOf(b.urgency) : URGENCY_ORDER.length;
+    if (aRank !== bRank) return aRank - bRank;
+    return new Date(a.due) - new Date(b.due);
+  });
+}
+
+// "Overdue" for the Hide-overdue toggle: prefer the backend's real status,
+// and only fall back to a plain date check (not urgency - that stays
+// backend-only) when status hasn't arrived yet.
+export function isOverdue(item, now) {
+  if (item.status) return item.status === "overdue";
+  if (item.done) return false;
+  return item.due && new Date(item.due) < now;
+}

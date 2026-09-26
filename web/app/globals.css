@@ -58,3 +58,66 @@ tr.overdue td {
   color: #666;
   padding: 1rem 0;
 }
+
+.connect-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.connect-bar button {
+  padding: 0.5rem 1rem;
+  border: 1px solid #1a1a1a;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.connect-bar button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.connect-error {
+  color: #b3261e;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.controls .toggle {
+  margin-bottom: 0;
+}
+
+.courses {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.course-card {
+  border: 1px solid #eee;
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.course-card h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.1rem;
+}
+
+.course-title {
+  font-weight: normal;
+  color: #666;
+}
+
+.course-meta {
+  color: #666;
+  margin: 0 0 0.75rem;
+}
