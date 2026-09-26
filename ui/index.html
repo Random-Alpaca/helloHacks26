@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UBC Hub</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #fafaf9; --card: #fff; --border: #e5e5e0; --text: #1c1c1a; --muted: #78766e;
+    --task: #3b6e8f; --deadline: #b5432a; --material: #4a7a4a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #171614; --card: #201f1c; --border: #34322d; --text: #ece9e2; --muted: #a19d8f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.4 system-ui, sans-serif; }
+  header { padding: 20px 16px 8px; }
+  h1 { margin: 0; font-size: 1.3rem; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: 0.9rem; }
+  nav { display: flex; gap: 6px; padding: 0 16px 12px; overflow-x: auto; }
+  nav button {
+    border: 1px solid var(--border); background: var(--card); color: var(--text);
+    border-radius: 999px; padding: 6px 14px; font: inherit; cursor: pointer; white-space: nowrap;
+  }
+  nav button[aria-pressed="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
+  main { padding: 0 16px 40px; max-width: 640px; margin: 0 auto; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li {
+    display: flex; gap: 10px; align-items: baseline; background: var(--card);
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px;
+  }
+  li .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-top: 5px; }
+  .task .dot { background: var(--task); } .deadline .dot { background: var(--deadline); } .material .dot { background: var(--material); }
+  li .body { flex: 1; min-width: 0; }
+  li .title { font-weight: 500; }
+  li .title a { color: inherit; text-decoration: none; }
+  li .title a:hover { text-decoration: underline; }
+  li .meta { color: var(--muted); font-size: 0.85rem; }
+  li .due { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
+  li.overdue .due { color: var(--deadline); font-weight: 500; }
+  #empty { color: var(--muted); padding: 20px 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>UBC Hub</h1>
+  <p>What's due, across every connected provider.</p>
+</header>
+<nav id="tabs">
+  <button data-category="" aria-pressed="true">All</button>
+  <button data-category="task">Tasks</button>
+  <button data-category="deadline">Deadlines</button>
+  <button data-category="material">Materials</button>
+</nav>
+<main><ul id="list"></ul><p id="empty" hidden>Nothing here.</p></main>
+<script>
+const list = document.getElementById("list");
+const empty = document.getElementById("empty");
+const tabs = document.getElementById("tabs");
+let items = [];
+
+function render(category) {
+  const rows = category ? items.filter(i => i.category === category) : items;
+  list.innerHTML = "";
+  empty.hidden = rows.length > 0;
+  const now = new Date();
+  for (const i of rows) {
+    const li = document.createElement("li");
+    li.className = i.category;
+    const due = i.due ? new Date(i.due) : null;
+    if (due && due < now) li.classList.add("overdue");
+    li.innerHTML = `
+      <span class="dot"></span>
+      <span class="body">
+        <div class="title">${i.url ? `<a href="${i.url}" target="_blank" rel="noopener">${i.title}</a>` : i.title}</div>
+        <div class="meta">${i.course} &middot; ${i.kind}</div>
+      </span>
+      <span class="due">${due ? due.toLocaleString(undefined, {weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit"}) : ""}</span>`;
+    list.appendChild(li);
+  }
+}
+
+tabs.addEventListener("click", e => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  for (const b of tabs.children) b.setAttribute("aria-pressed", b === btn);
+  render(btn.dataset.category);
+});
+
+fetch("/api/upcoming").then(r => r.json()).then(data => {
+  items = data;
+  render("");
+}).catch(() => { empty.hidden = false; empty.textContent = "Couldn't reach the server."; });
+</script>
+</body>
+</html>
