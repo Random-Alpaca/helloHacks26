@@ -17,8 +17,8 @@ UI_DIR = Path(__file__).parent.parent / "ui"
 
 
 def _row_to_dict(row):
-    code, category, kind, title, due, url = row
-    return {"course": code, "category": category, "kind": kind, "title": title, "due": due, "url": url}
+    code, category, kind, title, due, url, done = row
+    return {"course": code, "category": category, "kind": kind, "title": title, "due": due, "url": url, "done": bool(done) if done is not None else None}
 
 
 class Handler(BaseHTTPRequestHandler):

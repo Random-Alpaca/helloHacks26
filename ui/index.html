@@ -68,7 +68,9 @@ function render(category) {
     const li = document.createElement("li");
     li.className = i.category;
     const due = i.due ? new Date(i.due) : null;
-    if (due && due < now) li.classList.add("overdue");
+    // "overdue" only if it's actually overdue AND not already done - a done item
+    // past its due date isn't something left to worry about.
+    if (!i.done && due && due < now) li.classList.add("overdue");
     li.innerHTML = `
       <span class="dot"></span>
       <span class="body">
