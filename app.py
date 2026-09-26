@@ -3,9 +3,9 @@ from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 
-from hub import canvas, db
+from hub import canvas, db, prairielearn
 from hub.logic import sort_items
-from hub.models import Course, Item, category_for, classify_urgency
+from hub.models import Course, Item, category_for, classify_urgency, status_of
 
 st.set_page_config(page_title="UBC Hub")
 st.title("UBC Hub")
@@ -29,9 +29,14 @@ def sample_conn():
 
 with st.sidebar:
     demo = st.toggle("Sample data", value=True, help="Off = your own Canvas data from this laptop's hub.db")
-    if not demo and st.button("Connect Canvas", help="Opens a browser window: sign in with CWL + Duo yourself"):
-        with st.spinner("Waiting for you to sign in to Canvas…"):
-            db.save(db.connect(), *canvas.fetch())
+    if not demo:
+        col1, col2 = st.columns(2)
+        if col1.button("Connect Canvas", help="Opens a browser window: sign in with CWL + Duo yourself"):
+            with st.spinner("Waiting for you to sign in to Canvas…"):
+                db.save(db.connect(), *canvas.fetch())
+        if col2.button("Connect PrairieLearn", help="Opens a browser window: sign in with CWL + Duo yourself"):
+            with st.spinner("Waiting for you to sign in to PrairieLearn…"):
+                db.save(db.connect(), *prairielearn.fetch())
     n = st.slider("Show next", 5, 50, 10)
     hide_overdue = st.toggle("Hide overdue", value=False)
 
@@ -40,9 +45,12 @@ now = datetime.now(timezone.utc)
 
 for tab, category in zip(st.tabs(["All", "Tasks", "Deadlines", "Materials"]), [None, "task", "deadline", "material"]):
     with tab:
-        # ponytail: overdue = due < now, computed here from the due string. Swap for the backend's
-        # due-status field when it lands.
-        rows = [r for r in db.upcoming(conn, category) if not hide_overdue or datetime.fromisoformat(r[4]) >= now]
+        def overdue(r):
+            item = Item(course=r[0], category=r[1], kind=r[2], title=r[3],
+                        due=datetime.fromisoformat(r[4]), url=r[5], source="", done=bool(r[6]) if r[6] is not None else None)
+            return status_of(item, now) == "overdue"
+
+        rows = [r for r in db.upcoming(conn, category) if not hide_overdue or not overdue(r)]
         rows = sort_items(rows, now)[:n]
         if not rows:
             st.info("Nothing upcoming." if demo else "Nothing yet. Connect Canvas in the sidebar.")
