@@ -32,14 +32,16 @@ with st.sidebar:
         with st.spinner("Waiting for you to sign in to Canvas…"):
             db.save(db.connect(), *canvas.fetch())
     n = st.slider("Show next", 5, 50, 10)
+    hide_overdue = st.toggle("Hide overdue", value=False)
 
 conn = sample_conn() if demo else db.connect()
 now = datetime.now(timezone.utc)
 
 for tab, category in zip(st.tabs(["All", "Tasks", "Deadlines", "Materials"]), [None, "task", "deadline", "material"]):
     with tab:
-        rows = [r for r in db.upcoming(conn, category) if datetime.fromisoformat(r[4]) >= now][:n]  # MVP ranking: soonest first
-        # ponytail: past-due items hidden; add an Overdue section when missing work matters for the demo.
+        # ponytail: overdue = due < now, computed here from the due string. Swap for the backend's
+        # due-status field when it lands.
+        rows = [r for r in db.upcoming(conn, category) if not hide_overdue or datetime.fromisoformat(r[4]) >= now][:n]
         if not rows:
             st.info("Nothing upcoming." if demo else "Nothing yet. Connect Canvas in the sidebar.")
             continue
