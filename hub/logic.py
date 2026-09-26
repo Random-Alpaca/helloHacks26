@@ -1,5 +1,7 @@
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+_SOON_WINDOW = timedelta(hours=48)
 
 _NO_DUE_DATE = datetime.max.replace(tzinfo=timezone.utc)
 
@@ -23,3 +25,19 @@ def normalise_course_code(text):
 
 def sort_items(items):
     return sorted(items, key=lambda item: item.due or _NO_DUE_DATE)
+
+
+def flag(item, now):
+    # Canvas's own rule: once an item is done (submitted), it never counts
+    # as missing/overdue again, even if it was done late.
+    if item.done or item.due is None:
+        return None
+    if item.due < now:
+        return "overdue"
+    if item.due - now <= _SOON_WINDOW:
+        return "soon"
+    return None
+
+
+def delete_item(items, item_id):
+    return [item for item in items if item.id != item_id]
