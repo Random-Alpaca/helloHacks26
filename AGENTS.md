@@ -124,15 +124,29 @@ Several agents work in this repo at once, each run by a different person on a di
 
 ```
 app.py              Streamlit entry point (UI only, no fetching or parsing logic here)
-hub/models.py       Course, Item, Textbook dataclasses: the shared model (docs/design.md §4)
-hub/logic.py        normalise, match course codes, dedupe, sort, clashes (pure functions)
+hub/models.py       Course, Item, Textbook dataclasses: THE shared model (Jacky's; design.md §4 is only a proposal)
+hub/db.py           SQLite storage (~/.ubc-hub/hub.db): save() upserts, upcoming(), courses(), by_course()
+hub/logic.py        normalise, match course codes, dedupe, sort, flags (pure functions, on Jacky's model)
 hub/site.py         shared core for "student logs in themselves" sites: login, saved session, pagination, 429 backoff
 hub/canvas.py       Canvas adapter (browser session → /api/v1 JSON)
 hub/ics.py          any .ics calendar feed (Canvas, Moodle, ...)
+hub/prairielearn.py PrairieLearn adapter (browser session → assessments page)
 hub/<provider>.py   future providers: add a file, touch nothing else
 fixtures/           sample JSON/.xlsx/.ics/.html for tests and UI work (fake data only)
 tests/test_*.py     pytest tests
 ```
+
+### Jacky's standard (the backend contract; Terrace enforces it)
+
+Every branch must meet this before its PR merges. Reviewers check it first.
+1. **One model.** Import `Course`, `Item` and `Textbook` from `hub/models.py` on `main`. Never define your own copy, and never add fields yourself. Propose them on the Agent board (#15) and Jacky decides. Today `Item` is `course, category, kind, title, due, url, source`.
+2. **`category` comes from `kind`.** Set `kind` to a specific label (`"quiz"`, `"reading"`…) and let `category_for(kind)` derive `task`, `deadline` or `material`. Unknown kinds default to `task`, and adding one is a one-line change to `CATEGORY_FOR`.
+3. **Every `due` is timezone-aware** (`datetime` with tzinfo) or `None`. Naive datetimes crash comparisons in the UI.
+4. **Identity is `(source, url)`.** That's the item's upsert key in `hub.db`. There's no separate `id` field: to find, delete or dedupe an item from one source, use `(source, url)`.
+5. **Adapters persist via `db.save(conn, courses, items, textbooks)`**, and the UI reads via `db.upcoming()`, `db.by_course()` and `db.courses()`. Nothing else touches SQL.
+6. **Logged-in sites reuse `hub/site.py`** (login, session, pagination, 429 backoff). Don't write a second login flow.
+7. **Mark deliberate shortcuts** with a `# ponytail:` comment that names the limit and the upgrade path, as in `hub/db.py` and `hub/canvas.py`.
+8. **Tests are network-free** and `uv run pytest` is green before you push. Live verification against a real account is welcome, but it goes in the PR description, not in tests.
 
 - **The backend layout is Jacky's call.** The block above mirrors `main`; if they differ, the code wins. Ask Jacky or their agent (Agent board #15) before adding backend modules or changing `hub/models.py` or `hub/site.py`.
 - **Everything speaks the shared model.** Each adapter has one public `fetch(...)` returning `Course`, `Item` and/or `Textbook` objects, each with its `source` set. The UI and logic never see raw API JSON or HTML, and never branch on a provider name.
