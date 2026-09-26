@@ -9,7 +9,7 @@ import re
 import requests
 from icalendar import Calendar
 
-from hub.models import Item
+from hub.models import Item, category_for
 
 # Canvas puts "[COURSE CODE]" on the end of every event/assignment summary.
 # Moodle feeds don't, so course comes back "" there - fine for a first cut.
@@ -24,12 +24,14 @@ def parse(ics_text, source):
         m = COURSE_SUFFIX.search(summary)
         dtstart = event.get("dtstart")
         url = str(event.get("url", ""))
+        # ponytail: ics has no assignment/event/announcement flag; "/calendar_events/"
+        # in the link is the only signal Canvas gives us. Good enough for "what's due".
+        kind = "event" if "/calendar_events/" in url else "assignment"
         items.append(Item(
             course=m.group(1) if m else "",
+            category=category_for(kind),
+            kind=kind,
             title=COURSE_SUFFIX.sub("", summary),
-            # ponytail: ics has no assignment/event/announcement flag; "/calendar_events/"
-            # in the link is the only signal Canvas gives us. Good enough for "what's due".
-            kind="event" if "/calendar_events/" in url else "assignment",
             due=dtstart.dt if dtstart else None,
             url=url,
             source=source,
