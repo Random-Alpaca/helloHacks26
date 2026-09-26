@@ -28,6 +28,7 @@ Stack: **backend in Python 3.12** (managed with **uv**), **UI in Next.js (`web/`
 **The UI is `web/` (Terrace's decision, enforced).** Sam's Next.js app in `web/` is *the* product UI and the public site (https://hello-hacks26-terraceonhigh.vercel.app).
 - **All new UI work goes in `web/`.**
 - **Theme: Comprador, provisional (FLUID).** It uses the same palette and self-hosted fonts as `.streamlit/config.toml` and terrace.zone, as CSS variables in one place. Expect revision when Terrace's design lands (#14). Change tokens, not components, and don't hard-code colors.
+- **`web/` is not prod until it has feature parity with `app.py` (#31).** Terrace's agent checks parity item by item on the same data before `app.py` is retired. A claim isn't enough.
 - `app.py` (Streamlit) is **frozen**. It's the local live-demo harness for real Canvas + PrairieLearn logins until `web/` can read real data. Only fixes keep that demo working; no new features.
 - Don't start other UI directions (e.g. `jacky-ui-experiment`). A backend JSON API that feeds `web/` is fine, and that's Jacky's call.
 
