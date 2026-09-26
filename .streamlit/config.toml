@@ -1,0 +1,60 @@
+# House standards (shared with terrace.zone and Comprador's site):
+# - Fonts are self-hosted from static/fonts/ (OFL-1.1, see NOTICES.md), with no font CDN.
+# - The palette comes from terrace.zone's style.css tokens, in light and dark.
+#   This is a placeholder until Terrace's landing-page design lands (#14).
+
+[server]
+enableStaticServing = true
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[[theme.fontFaces]]
+family = "Bona Nova"
+url = "app/static/fonts/bona-nova-400.woff2"
+weight = 400
+style = "normal"
+
+[[theme.fontFaces]]
+family = "Bona Nova"
+url = "app/static/fonts/bona-nova-400italic.woff2"
+weight = 400
+style = "italic"
+
+[[theme.fontFaces]]
+family = "Bona Nova"
+url = "app/static/fonts/bona-nova-700.woff2"
+weight = 700
+style = "normal"
+
+[[theme.fontFaces]]
+family = "IM Fell Double Pica SC"
+url = "app/static/fonts/im-fell-double-pica-sc-400.woff2"
+weight = 400
+style = "normal"
+
+[[theme.fontFaces]]
+family = "Syne Mono"
+url = "app/static/fonts/syne-mono-400.woff2"
+weight = 400
+style = "normal"
+
+[theme]
+font = "'Bona Nova', Georgia, serif"
+headingFont = "'IM Fell Double Pica SC', 'Bona Nova', Georgia, serif"
+codeFont = "'Syne Mono', ui-monospace, Menlo, monospace"
+
+[theme.light]
+primaryColor = "#3d6647"
+backgroundColor = "#f4f6f1"
+secondaryBackgroundColor = "#eceee9"
+textColor = "#111510"
+borderColor = "#cdd3c8"
+
+[theme.dark]
+primaryColor = "#7ab88a"
+backgroundColor = "#111510"
+secondaryBackgroundColor = "#191d16"
+textColor = "#dce3d6"
+borderColor = "#252c22"
