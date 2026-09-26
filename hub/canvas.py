@@ -91,9 +91,14 @@ def login():
 
 
 def fetch(start=None, end=None):
-    """Return (courses, items) for start..end (default: today + 7 days). Logs in if needed."""
-    start = start or date.today()
-    end = end or start + timedelta(days=7)
+    """Return (courses, items) for start..end. Logs in if needed.
+
+    Default is a whole UBC term either side of today (~4 months), not just
+    the coming week: planner/items needs *some* range, and Canvas doesn't
+    hand back "the whole term" for us to use instead.
+    """
+    start = start or date.today() - timedelta(days=120)
+    end = end or date.today() + timedelta(days=120)
     if not STATE.exists():
         login()
     try:
