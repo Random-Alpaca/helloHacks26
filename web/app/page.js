@@ -681,16 +681,17 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
         </div>
         <div className="mb-4 rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4">
           <div className="mb-2 text-xs font-bold text-[var(--muted)]">
-            {isLocalMode() ? "✓ Detected: this page is running locally right now." : "Not running locally in this browser - one-time setup, in a terminal:"}
+            {isLocalMode() ? "✓ Detected: this page is running locally right now." : "One-liner, in a terminal (needs Homebrew's uv, nothing else - no repo clone):"}
           </div>
           {!isLocalMode() && (
-            <pre className="overflow-x-auto rounded-md bg-[var(--surface)] p-3 text-[0.7rem] leading-relaxed">
-{`brew install git gh uv
-gh repo clone terraceonhigh/helloHacks26
-cd helloHacks26 && uv sync
-uv run playwright install chromium
-uv run streamlit run app.py`}
-            </pre>
+            <>
+              <pre className="overflow-x-auto rounded-md bg-[var(--surface)] p-3 text-[0.7rem] leading-relaxed">
+{`curl -fsSL https://raw.githubusercontent.com/terraceonhigh/helloHacks26/main/tools/sync.sh | bash`}
+              </pre>
+              <div className="mt-2 text-[0.7rem] text-[var(--muted)]">
+                Opens a browser window per provider for you to log into, scans Canvas and PrairieLearn, then prints a sync key - paste that into "Paste your hub sync key" above to see it here, same as the extension.
+              </div>
+            </>
           )}
         </div>
         {isLocalMode() && (
