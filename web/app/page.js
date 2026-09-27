@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   connectCanvas,
   connectPrairieLearn,
@@ -281,7 +281,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
               <input type="text" value={term} onChange={(e) => setTerm(e.target.value)} size={7} aria-label="Term" className="rounded-md border border-[var(--line)] bg-[var(--surface-soft)] px-2 py-1 text-xs" />
               <label className="toggle-pill cursor-pointer">
                 Import .xlsx
-                <input type="file" accept=".xlsx" onChange={handleFile} className="hidden" />
+                <input type="file" accept=".xlsx" onChange={handleFile} className="sr-only" />
               </label>
             </div>
           </div>
@@ -342,6 +342,7 @@ export default function App() {
   const [importedCourses, setImportedCourses] = useState([]);
   const [loadError, setLoadError] = useState(null);
   const [hiddenCourses, setHiddenCourses] = useState([]);
+  const loadRequestId = useRef(0);
 
   useEffect(() => {
     setTheme(localStorage.getItem("gather-theme") || "everforest");
@@ -383,12 +384,19 @@ export default function App() {
   }
 
   async function load(useSample) {
+    // A slow local-mode response can land after the student has already
+    // flipped back to Sample (or vice versa) - a sequence number, not just
+    // "latest wins by promise order", so a stale response is dropped instead
+    // of overwriting what's now on screen with a mismatched useSample's data.
+    const requestId = ++loadRequestId.current;
     try {
       const [nextItems, nextCourses] = await Promise.all([fetchUpcoming(useSample), fetchCourses(useSample)]);
+      if (requestId !== loadRequestId.current) return;
       setItems(nextItems);
       setFetchedCourses(nextCourses);
       setLoadError(null);
     } catch (e) {
+      if (requestId !== loadRequestId.current) return;
       setItems([]);
       setFetchedCourses([]);
       setLoadError(e.message);
