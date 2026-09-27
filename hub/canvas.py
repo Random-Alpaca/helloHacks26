@@ -1,4 +1,4 @@
-"""Canvas adapter without API tokens.
+"""Canvas adapter for local browser sessions or hosted OAuth access tokens.
 
 The student logs in to canvas.ubc.ca themselves (CWL + Duo) in a real browser
 window (hub.site handles that part). We reuse that session to call the same
@@ -9,7 +9,9 @@ Try it:  uv run python -m hub.canvas
 """
 import json
 from datetime import date, datetime, timedelta
-from urllib.parse import urljoin
+from urllib.parse import urlencode, urljoin, urlparse
+
+import requests
 
 from hub import site
 from hub.models import Course, Item, category_for
@@ -100,8 +102,87 @@ def login():
     site.login(SITE, BASE)
 
 
-def fetch(start=None, end=None):
-    """Return (courses, items) for start..end. Logs in if needed.
+def authorization_url(client_id, redirect_uri, state):
+    """URL for Canvas's server-side authorization-code flow.
+
+    The HTTP layer creates and verifies a one-time state value. Never place
+    the client secret, a token, or a student's password in this URL.
+    """
+    if not all((client_id, redirect_uri, state)):
+        raise ValueError("Canvas OAuth configuration or state is missing")
+    return f"{BASE}/login/oauth2/auth?{urlencode({
+        'client_id': client_id,
+        'response_type': 'code',
+        'redirect_uri': redirect_uri,
+        'state': state,
+    })}"
+
+
+def _token_request(client_id, client_secret, grant_type, **fields):
+    if not client_id or not client_secret or not all(fields.values()):
+        raise ValueError("Canvas OAuth credentials or grant value is missing")
+    response = requests.post(
+        f"{BASE}/login/oauth2/token",
+        data={"grant_type": grant_type, "client_id": client_id,
+              "client_secret": client_secret, **fields},
+        timeout=15,
+        allow_redirects=False,
+    )
+    # Never include Canvas's response body here: an upstream error may echo a
+    # code, token, or client secret and end up in public server logs.
+    if not 200 <= response.status_code < 300:
+        raise RuntimeError(f"Canvas OAuth token request failed ({response.status_code})")
+    try:
+        tokens = response.json()
+    except ValueError:
+        raise RuntimeError("Canvas OAuth token response is invalid JSON") from None
+    if not isinstance(tokens, dict) or not tokens.get("access_token"):
+        raise RuntimeError("Canvas OAuth token response is incomplete")
+    return tokens
+
+
+def exchange_code(client_id, client_secret, redirect_uri, code):
+    """Exchange a one-use callback code for Canvas access/refresh tokens."""
+    return _token_request(client_id, client_secret, "authorization_code",
+                          redirect_uri=redirect_uri, code=code)
+
+
+def refresh_token(client_id, client_secret, token):
+    """Refresh access; Canvas keeps the same refresh token across refreshes."""
+    return _token_request(client_id, client_secret, "refresh_token",
+                          refresh_token=token)
+
+
+class _BearerResponse:
+    """Expose requests' response through the small interface site.get_all uses."""
+
+    def __init__(self, response):
+        self.status = response.status_code
+        self.ok = 200 <= self.status < 300
+        self.headers = response.headers
+        self._response = response
+
+    def text(self):
+        return self._response.text
+
+
+class _BearerRequest:
+    def __init__(self, session):
+        self.session = session
+
+    def get(self, url):
+        parsed = urlparse(url)
+        # Canvas supplies pagination links. Never forward a student's bearer
+        # token to a different origin, even if an upstream Link header says to.
+        if (parsed.scheme != "https" or parsed.hostname != urlparse(BASE).hostname
+                or parsed.port is not None or parsed.username or parsed.password
+                or not parsed.path.startswith("/api/v1/")):
+            raise ValueError("Canvas API pagination left the allowed origin")
+        return _BearerResponse(self.session.get(url, timeout=15, allow_redirects=False))
+
+
+def fetch(start=None, end=None, *, access_token=None):
+    """Return (courses, items) for start..end, using OAuth or local login.
 
     Default is a whole UBC term either side of today (~4 months), not just
     the coming week: planner/items needs *some* range, and Canvas doesn't
@@ -109,7 +190,13 @@ def fetch(start=None, end=None):
     """
     start = start or date.today() - timedelta(days=120)
     end = end or date.today() + timedelta(days=120)
-    return site.fetch_with_session(SITE, BASE, lambda req: _run(req, start, end))
+    if access_token is None:
+        return site.fetch_with_session(SITE, BASE, lambda req: _run(req, start, end))
+    if not access_token:
+        raise ValueError("Canvas access token is empty")
+    with requests.Session() as session:
+        session.headers.update({"Authorization": f"Bearer {access_token}"})
+        return _run(_BearerRequest(session), start, end)
 
 
 def _run(req, start, end):
