@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from hub.logic import dedupe, delete_item, normalise_course_code, sort_items
+from hub.logic import dedupe, delete_item, normalise_course_code, sort_items, suspected_duplicates
 from hub.models import Item, category_for
 
 NOW = datetime(2026, 9, 30, 12, 0, tzinfo=timezone.utc)
@@ -85,3 +85,38 @@ def test_dedupe_same_course_title_due_counts_as_one():
     result = dedupe([from_canvas, from_ics, different])
 
     assert [item.label for item in result] == ["canvas", "other"]
+
+
+def test_suspected_duplicates_flags_fuzzy_title_and_close_due_across_sources():
+    due = datetime(2026, 10, 2, 23, 59, tzinfo=timezone.utc)
+    canvas_item = _item("Homework 3: Recursion")
+    canvas_item.due = due
+    pl_item = Item(
+        course="CPSC 121", category=category_for("assignment"), kind="assignment",
+        title="hw3 recursion", due=due - timedelta(hours=1),
+        url="https://example.invalid/pl3", source="prairielearn",
+    )
+    pairs = suspected_duplicates([canvas_item, pl_item])
+    assert pairs == [(canvas_item, pl_item)]
+
+
+def test_suspected_duplicates_ignores_far_apart_due_dates():
+    canvas_item = _item("Homework 3: Recursion")
+    canvas_item.due = datetime(2026, 10, 2, 23, 59, tzinfo=timezone.utc)
+    pl_item = Item(
+        course="CPSC 121", category=category_for("assignment"), kind="assignment",
+        title="hw3 recursion", due=datetime(2026, 10, 5, 23, 59, tzinfo=timezone.utc),
+        url="https://example.invalid/pl3", source="prairielearn",
+    )
+    assert suspected_duplicates([canvas_item, pl_item]) == []
+
+
+def test_suspected_duplicates_ignores_unrelated_titles_even_with_same_due():
+    due = datetime(2026, 10, 2, 23, 59, tzinfo=timezone.utc)
+    canvas_item = _item("Midterm 1")
+    canvas_item.due = due
+    pl_item = Item(
+        course="CPSC 121", category=category_for("assignment"), kind="assignment",
+        title="Lab 4 checkoff", due=due, url="https://example.invalid/pl4", source="prairielearn",
+    )
+    assert suspected_duplicates([canvas_item, pl_item]) == []

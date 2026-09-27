@@ -47,8 +47,15 @@ def done_from_submissions(p):
 
 
 def to_item(p, course_codes):
-    due = p.get("plannable_date")
     kind = KINDS.get(p.get("plannable_type"), "assignment")
+    # Canvas's planner `plannable_date` is a real deadline for assignments/
+    # quizzes/events, but for an announcement it's just when it was posted -
+    # verified against a real planner/items response, where every
+    # announcement's plannable_date sat well in the past. Treating that as a
+    # `due` made every announcement look permanently overdue. Announcements
+    # aren't due anything, so they get no due date at all (excluded from
+    # hub.db.upcoming(), which requires one - they're not a task to do).
+    due = p.get("plannable_date") if kind != "announcement" else None
     return Item(
         course=course_codes.get(p.get("course_id"), p.get("context_name", "")),
         category=category_for(kind),
