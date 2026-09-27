@@ -68,6 +68,11 @@ class _Response:
         return self._body
 
 
+# The demo student is on PrairieLearn's default campus - same key/base a
+# real hub.prairielearn.fetch() with no argument resolves to.
+_PL_KEY, _PL_BASE = prairielearn.resolve_campus(prairielearn.DEFAULT_CAMPUS)
+
+
 class _FixtureRequest:
     """Stands in for the logged-in browser session hub.site hands an
     adapter's _run(): same .get(url) -> response interface, but every URL is
@@ -88,7 +93,7 @@ class _FixtureRequest:
             if m:
                 by_course = json.loads(_render("canvas_assignments.json", "canvas", self.now))
                 return _Response(json.dumps(by_course.get(m[1], [])))
-        if host == urlparse(prairielearn.BASE).hostname:
+        if host == urlparse(_PL_BASE).hostname:
             if path == "":
                 return _Response(_render("prairielearn_home.html", "prairielearn", self.now))
             m = re.fullmatch(r"/pl/course_instance/(\d+)/assessments", path)
@@ -109,7 +114,7 @@ def _gather(now):
     courses += c_courses
     items += c_items
     items += ics.parse(_render("canvas_calendar.ics", "ics", now), "canvas")
-    p_courses, p_items = prairielearn._run(req)
+    p_courses, p_items = prairielearn._run(req, _PL_KEY, _PL_BASE)
     courses += p_courses
     items += p_items
     k_courses, k_items = key_dates.fetch("UBCV", TERM, now=now)
