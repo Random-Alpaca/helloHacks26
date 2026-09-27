@@ -580,6 +580,9 @@ export default function App() {
                           <div className="truncate font-bold">{item.title}</div>
                           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-[var(--muted)]">
                             <span>{item.course}</span><span>·</span><span>{item.kind}</span>
+                            {/* The boxed due-date badge below is sm:+ only - repeat it as
+                                plain text here so due dates aren't lost below that breakpoint. */}
+                            <span className={`sm:hidden ${isOverdue(item, now) ? "font-bold text-[var(--danger)]" : ""}`}>· {formatDue(item.due)}</span>
                           </div>
                         </div>
                         <div className={`hidden shrink-0 rounded-lg px-3 py-2 text-right sm:block ${isOverdue(item, now) ? "due-now" : ""}`}>
