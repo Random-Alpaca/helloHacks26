@@ -8,7 +8,10 @@ import {
   connectPrairieLearnOk,
   displayLabel,
   fetchAnnouncements,
-  fetchCanvasFeed,
+  connectCanvasFeed as postCanvasFeed,
+  refreshCanvasFeed,
+  disconnectCanvasFeed as deleteCanvasFeed,
+  migrateLegacyFeedUrl,
   fetchCourses,
   fetchHostedStore,
   fetchUpcoming,
@@ -265,7 +268,18 @@ function CalendarSection({ items, meetings, now, onToggleItemDone }) {
   );
 }
 
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind, onConnectHosted, onSynced, hostedConnected, allItems, allCoursesForPush }) {
+const SOURCE_LABELS = {
+  canvas: "Canvas",
+  canvas_feed: "Canvas calendar feed",
+  prairielearn: "PrairieLearn",
+  prairielearn_ok: "PrairieLearn (Okanagan)",
+  prairielearn_custom: "PrairieLearn",
+  hosted: "Hub sync key",
+  "sync-all": "Sync everywhere",
+  push: "Push to hosted",
+};
+
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, feedConnected, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind, onConnectHosted, onSynced, hostedConnected, allItems, allCoursesForPush }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
   const [customDomain, setCustomDomain] = useState("");
@@ -355,7 +369,8 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
       await fn();
       await onConnected();
     } catch (e) {
-      setError(`${name}: ${e.message}`);
+      // A person reads this - a human label, never an internal source id.
+      setError(`${SOURCE_LABELS[name] ?? "Connect"}: ${e.message}`);
     } finally {
       setBusy(null);
     }
@@ -507,7 +522,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
 
           {!sampleMode && (
             <div className="py-3">
-              {canvasFeedUrl ? (
+              {feedConnected ? (
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4">
                   <div>
                     <div className="text-sm font-bold">Calendar feed connected</div>
@@ -536,7 +551,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
                     />
                     <AppButton
                       disabled={busy !== null || !feedUrlInput}
-                      onClick={() => run("canvas_feed", () => onConnectFeed(feedUrlInput))}
+                      onClick={() => run("canvas_feed", async () => { await onConnectFeed(feedUrlInput); setFeedUrlInput(""); })}
                       className="toggle-pill"
                     >
                       {busy === "canvas_feed" ? "Connecting…" : "Connect"}
@@ -666,16 +681,17 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
         </div>
         <div className="mb-4 rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4">
           <div className="mb-2 text-xs font-bold text-[var(--muted)]">
-            {isLocalMode() ? "✓ Detected: this page is running locally right now." : "Not running locally in this browser - one-time setup, in a terminal:"}
+            {isLocalMode() ? "✓ Detected: this page is running locally right now." : "One-liner, in a terminal (needs Homebrew's uv, nothing else - no repo clone):"}
           </div>
           {!isLocalMode() && (
-            <pre className="overflow-x-auto rounded-md bg-[var(--surface)] p-3 text-[0.7rem] leading-relaxed">
-{`brew install git gh uv
-gh repo clone terraceonhigh/helloHacks26
-cd helloHacks26 && uv sync
-uv run playwright install chromium
-uv run streamlit run app.py`}
-            </pre>
+            <>
+              <pre className="overflow-x-auto rounded-md bg-[var(--surface)] p-3 text-[0.7rem] leading-relaxed">
+{`curl -fsSL https://raw.githubusercontent.com/terraceonhigh/helloHacks26/main/tools/sync.sh | bash`}
+              </pre>
+              <div className="mt-2 text-[0.7rem] text-[var(--muted)]">
+                Opens a browser window per provider for you to log into, scans Canvas and PrairieLearn, then prints a sync key - paste that into "Paste your hub sync key" above to see it here, same as the extension.
+              </div>
+            </>
           )}
         </div>
         {isLocalMode() && (
@@ -770,7 +786,7 @@ export default function App() {
   const [loadError, setLoadError] = useState(null);
   const [hiddenCourses, setHiddenCourses] = useState([]);
   const [manuallyDoneKeys, setManuallyDoneKeys] = useState([]);
-  const [canvasFeedUrl, setCanvasFeedUrl] = useState("");
+  const [feedConnected, setFeedConnected] = useState(false);
   const [feedItems, setFeedItems] = useState([]);
   const [feedError, setFeedError] = useState(null);
   const [storeItems, setStoreItems] = useState([]);
@@ -808,24 +824,25 @@ export default function App() {
       // ignore malformed/missing storage - keep the default (nothing checked off)
     }
     setPreferredKinds(readPreferredKindsCookie());
-    // The feed URL is a secret (works like a password) - localStorage only,
-    // never sent anywhere but /api/feed. Re-fetches automatically on every
-    // load so a saved connection keeps working without re-pasting the link.
-    const savedFeedUrl = localStorage.getItem("gather-canvas-feed-url");
-    if (savedFeedUrl) {
-      setCanvasFeedUrl(savedFeedUrl);
-      const requestId = ++feedRequestId.current;
-      fetchCanvasFeed(savedFeedUrl)
-        .then((nextFeedItems) => {
-          if (requestId !== feedRequestId.current) return; // superseded by a connect/disconnect since
-          setFeedItems(nextFeedItems);
-        })
-        .catch(() => {
-          if (requestId !== feedRequestId.current) return;
-          // Generic message only - a server error must never put the feed URL (a secret) on screen.
-          setFeedError("Couldn't refresh your feed - it may have expired or changed.");
-        });
-    }
+    // The feed URL is a secret (works like a password): it lives only in an
+    // httpOnly cookie the page can't read (see hub/ics.py's feed_request()).
+    // An older build kept it in localStorage - migrate that once, deleting
+    // it whatever happens, then refresh from the cookie on every load so a
+    // saved connection keeps working without re-pasting the link.
+    const requestId = ++feedRequestId.current;
+    migrateLegacyFeedUrl(window.localStorage)
+      .then(() => refreshCanvasFeed())
+      .then((nextFeedItems) => {
+        if (requestId !== feedRequestId.current) return; // superseded by a connect/disconnect since
+        setFeedConnected(nextFeedItems !== null);
+        setFeedItems(nextFeedItems ?? []);
+      })
+      .catch(() => {
+        if (requestId !== feedRequestId.current) return;
+        // Generic message only - a server error must never put the feed URL (a secret) on screen.
+        setFeedConnected(true);
+        setFeedError("Couldn't refresh your feed - it may have expired or changed.");
+      });
     // Hosted store: a #sync=<key> link from the extension becomes an
     // httpOnly cookie, and the fragment is dropped from the address bar
     // before anything else happens. Any failure (503 until the store is
@@ -881,24 +898,23 @@ export default function App() {
     const requestId = ++feedRequestId.current;
     let nextFeedItems;
     try {
-      nextFeedItems = await fetchCanvasFeed(url);
+      nextFeedItems = await postCanvasFeed(url);
     } catch {
       // Generic message only - a server error must never put the feed URL (a secret) on screen.
       throw new Error("Couldn't load that feed - double check the link and try again.");
     }
     if (requestId !== feedRequestId.current) return; // superseded by a disconnect/another connect since
-    setCanvasFeedUrl(url);
+    setFeedConnected(true); // the URL itself is now only in the httpOnly cookie
     setFeedItems(nextFeedItems);
     setFeedError(null);
-    localStorage.setItem("gather-canvas-feed-url", url);
   }
 
   function disconnectCanvasFeed() {
     feedRequestId.current++; // invalidate any in-flight fetch, so it can't overwrite this afterward
-    setCanvasFeedUrl("");
+    setFeedConnected(false);
     setFeedItems([]);
     setFeedError(null);
-    localStorage.removeItem("gather-canvas-feed-url");
+    deleteCanvasFeed(); // the server clears the cookie
   }
 
   async function load(useSample) {
@@ -1078,7 +1094,7 @@ export default function App() {
               allCourses={allCourses}
               hiddenCourses={hiddenCourses}
               onToggleCourseHidden={toggleCourseHidden}
-              canvasFeedUrl={canvasFeedUrl}
+              feedConnected={feedConnected}
               feedItemCount={feedItems.length}
               feedError={feedError}
               onConnectFeed={connectCanvasFeed}
@@ -1191,7 +1207,7 @@ export default function App() {
                     ))}
                     {topAssignments.length === 0 && (
                       <div className="p-10 text-center text-sm text-[var(--muted)]">
-                        {sampleMode ? "Nothing upcoming." : "Nothing yet. Connect Canvas or PrairieLearn above."}
+                        {sampleMode ? "Nothing upcoming." : "Nothing yet. Connect Canvas or PrairieLearn in Settings."}
                       </div>
                     )}
                   </div>
@@ -1251,7 +1267,7 @@ export default function App() {
                 {activeNavTab === "announcements" ? (
                   visibleAnnouncements.length === 0 ? (
                     <div className="p-10 text-center text-sm text-[var(--muted)]">
-                      {sampleMode ? "No announcements in sample data." : "Nothing yet. Connect Canvas above."}
+                      {sampleMode ? "No announcements in sample data." : "Nothing yet. Connect Canvas in Settings."}
                     </div>
                   ) : (
                     visibleAnnouncements.map((item) => (
@@ -1268,7 +1284,7 @@ export default function App() {
                 ) : activeNavTab === "courses" ? (
                   courses.length === 0 ? (
                     <div className="p-10 text-center text-sm text-[var(--muted)]">
-                      {sampleMode ? "No courses." : "Nothing yet. Connect Canvas above."}
+                      {sampleMode ? "No courses." : "Nothing yet. Connect Canvas in Settings."}
                     </div>
                   ) : (
                     courses.map((course) => (
@@ -1333,7 +1349,7 @@ export default function App() {
                     ))}
                     {visible.length === 0 && (
                       <div className="p-10 text-center text-sm text-[var(--muted)]">
-                        {sampleMode ? "Nothing upcoming." : "Nothing yet. Connect Canvas or PrairieLearn above."}
+                        {sampleMode ? "Nothing upcoming." : "Nothing yet. Connect Canvas or PrairieLearn in Settings."}
                       </div>
                     )}
                   </>
