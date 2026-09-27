@@ -33,6 +33,7 @@ Two real limitations, not guessed:
 
 Try it:  uv run python -m hub.prairielearn
 """
+import ipaddress
 import re
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, urlparse
@@ -49,14 +50,25 @@ CAMPUSES = {
 DEFAULT_CAMPUS = "prairielearn"
 
 
+def _is_ip_literal(host):
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
 def resolve_campus(campus):
     """A known short key resolves from CAMPUSES; anything else is treated as
     a student-pasted PrairieLearn URL for an instance we don't have listed
     (any department can self-host one - see module docstring). Returns
     (campus_key, base_url); campus_key becomes both the saved-session
     filename (hub.site.state_path) and the item source, so for a custom URL
-    it's the bare hostname, not the full URL (filesystem/identity-safe,
-    still stable across reconnects to the same instance).
+    it's `pl-<hostname>`, not the bare hostname or the full URL - the "pl-"
+    prefix keeps it from ever colliding with another provider's own key
+    (e.g. a pasted "https://canvas" used to overwrite Canvas's saved session
+    and file its items under Canvas's source - PM review on #56 caught this
+    live).
 
     A pasted URL that happens to match a *known* campus's base resolves to
     that campus's own key, not its own hostname - otherwise the same real
@@ -64,21 +76,35 @@ def resolve_campus(campus):
     quick-connect button, one from someone pasting its URL instead) and
     show up as two separate connections with duplicated items. Verified
     against a real account that hit exactly this after connecting the same
-    UBC Okanagan instance both ways.
+    UBC Okanagan instance both ways. The host is normalised (lowercased,
+    default :443 port and any trailing dot stripped) before that comparison
+    and before becoming a key, so "PrairieLearn.ok.ubc.ca", "...:443" and a
+    trailing "." don't each create their own separate connection.
 
     Rejects anything that isn't a real https:// URL outright - this opens a
     real login browser window at whatever's returned, so a typo or a
-    non-URL string must fail loudly here rather than reach Playwright."""
+    non-URL string must fail loudly here rather than reach Playwright.
+    Also rejects a URL carrying userinfo (a classic look-alike-URL trick,
+    e.g. "https://us.prairielearn.com@evil.example"), an IP literal, and
+    "localhost" - none of those are a real PrairieLearn deployment, and
+    letting one through would open the login browser at whatever host was
+    actually meant (PM review on #56)."""
     if campus in CAMPUSES:
         return campus, CAMPUSES[campus]
     parsed = urlparse(campus)
-    if parsed.scheme != "https" or not parsed.netloc:
+    if parsed.scheme != "https" or not parsed.hostname:
         raise ValueError(f"not a valid https:// PrairieLearn URL: {campus!r}")
-    base = f"https://{parsed.netloc}"
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"URL must not contain a username/password: {campus!r}")
+    host = parsed.hostname.lower().rstrip(".")
+    if host == "localhost" or _is_ip_literal(host):
+        raise ValueError(f"not a real PrairieLearn hostname: {campus!r}")
+    port = "" if parsed.port in (None, 443) else f":{parsed.port}"
+    base = f"https://{host}{port}"
     for key, known_base in CAMPUSES.items():
         if known_base == base:
             return key, known_base
-    return parsed.netloc, base
+    return f"pl-{host}", base
 
 # UBC courses only ever show Pacific time. Fixed offsets, not zoneinfo/pytz:
 # good enough while every course we've seen is UBC; add zones if that changes.

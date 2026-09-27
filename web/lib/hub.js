@@ -351,7 +351,11 @@ export function selectConnections(items, importedCourses) {
   const knownIds = new Set(KNOWN_PROVIDERS.map((p) => p.id));
   const customSources = [...new Set(items.map((item) => item.source))].filter((s) => s && !knownIds.has(s));
   for (const source of customSources) {
-    rows.push({ id: source, label: `PrairieLearn (${source})`, connected: true, detail: countOf(countBySource(source), "item") });
+    // hub/prairielearn.py's resolve_campus() keys a pasted instance
+    // "pl-<host>" (never the bare host - that could collide with another
+    // provider's own key), so strip the prefix back off for display only.
+    const host = source.replace(/^pl-/, "");
+    rows.push({ id: source, label: `PrairieLearn (${host})`, connected: true, detail: countOf(countBySource(source), "item") });
   }
 
   rows.push({ id: "workday", label: "Workday", connected: importedCourses.length > 0, detail: `${countOf(importedCourses.length, "course")} imported` });

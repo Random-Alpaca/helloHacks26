@@ -186,21 +186,63 @@ def test_resolve_campus_accepts_a_pasted_url_for_an_unlisted_instance():
     # Any department can self-host their own PrairieLearn (a second, distinct
     # UBC Okanagan instance turned up in the same search that found the
     # first one) - a hardcoded list can never be complete, so a full URL
-    # works even when it's not one of the known CAMPUSES keys.
+    # works even when it's not one of the known CAMPUSES keys. The key is
+    # "pl-<host>", not the bare host, so a pasted PrairieLearn URL can never
+    # collide with another provider's own saved-session/source key (PM
+    # review on #56: a pasted "https://canvas" used to overwrite Canvas's).
     key, base = resolve_campus("https://pl.autoed.ok.ubc.ca")
-    assert (key, base) == ("pl.autoed.ok.ubc.ca", "https://pl.autoed.ok.ubc.ca")
+    assert (key, base) == ("pl-pl.autoed.ok.ubc.ca", "https://pl.autoed.ok.ubc.ca")
 
 
 def test_resolve_campus_strips_a_path_down_to_just_the_host():
     # A student pasting the login page URL rather than the bare domain
     # shouldn't produce a broken/duplicated base.
-    assert resolve_campus("https://pl.autoed.ok.ubc.ca/pl/login") == ("pl.autoed.ok.ubc.ca", "https://pl.autoed.ok.ubc.ca")
+    assert resolve_campus("https://pl.autoed.ok.ubc.ca/pl/login") == ("pl-pl.autoed.ok.ubc.ca", "https://pl.autoed.ok.ubc.ca")
+
+
+@pytest.mark.parametrize("variant", [
+    "https://PL.autoed.OK.ubc.ca",
+    "https://pl.autoed.ok.ubc.ca:443",
+    "https://pl.autoed.ok.ubc.ca.",
+])
+def test_resolve_campus_normalises_the_host_before_keying_it(variant):
+    # Case, an explicit default port, and a trailing dot are all the same
+    # host - each used to make its own separate connection (the exact class
+    # of duplicate-connection bug already fixed once for the exact-string
+    # case; PM review on #56 wanted it closed for good).
+    assert resolve_campus(variant) == ("pl-pl.autoed.ok.ubc.ca", "https://pl.autoed.ok.ubc.ca")
 
 
 @pytest.mark.parametrize("bad", ["http://pl.autoed.ok.ubc.ca", "not a url", "javascript:alert(1)", ""])
 def test_resolve_campus_rejects_anything_that_isnt_a_real_https_url(bad):
     # This opens a real login browser window at whatever's returned - a typo
     # or a non-URL string must fail loudly here, not reach Playwright.
+    with pytest.raises(ValueError):
+        resolve_campus(bad)
+
+
+@pytest.mark.parametrize("bad", [
+    "https://us.prairielearn.com@evil.example",
+    "https://user:pass@evil.example",
+])
+def test_resolve_campus_rejects_userinfo_lookalike_urls(bad):
+    # A classic look-alike URL: the real-looking hostname before "@" is
+    # userinfo, not the host - the browser would actually navigate to
+    # evil.example. PM review on #56 found this accepted and navigating.
+    with pytest.raises(ValueError):
+        resolve_campus(bad)
+
+
+@pytest.mark.parametrize("bad", [
+    "https://127.0.0.1",
+    "https://localhost",
+    "https://[::1]",
+    "https://192.168.1.1",
+])
+def test_resolve_campus_rejects_ip_literals_and_localhost(bad):
+    # None of these are a real PrairieLearn deployment - PM review on #56
+    # found them accepted, which would open the login browser wherever a
+    # student's own machine (or an attacker) pointed it.
     with pytest.raises(ValueError):
         resolve_campus(bad)
 

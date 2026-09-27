@@ -34,13 +34,18 @@ test("selectConnections: imported Workday courses count as connected regardless 
 test("selectConnections: an unrecognized source shows up as its own custom PrairieLearn row", () => {
   // Any source that isn't one of the known providers is a PrairieLearn
   // instance a student pasted in directly (resolve_campus() accepts a full
-  // URL for any self-hosted instance we don't have a fixed entry for).
-  const items = [{ source: "pl.autoed.ok.ubc.ca" }, { source: "pl.autoed.ok.ubc.ca" }];
+  // URL for any self-hosted instance we don't have a fixed entry for). The
+  // source is "pl-<host>", not the bare host (PM review on #56: a bare host
+  // could collide with another provider's own key) - the id keeps that
+  // prefix (it's still the real (source, url) identity), but the label
+  // strips it back off for display.
+  const items = [{ source: "pl-pl.autoed.ok.ubc.ca" }, { source: "pl-pl.autoed.ok.ubc.ca" }];
   const connections = selectConnections(items, []);
-  const custom = connections.find((c) => c.id === "pl.autoed.ok.ubc.ca");
+  const custom = connections.find((c) => c.id === "pl-pl.autoed.ok.ubc.ca");
   assert.ok(custom, "custom source should get its own row");
   assert.equal(custom.connected, true);
   assert.equal(custom.detail, "2 items");
+  assert.equal(custom.label, "PrairieLearn (pl.autoed.ok.ubc.ca)");
   // and it shouldn't duplicate or displace the known providers
   assert.equal(connections.filter((c) => c.id === "prairielearn").length, 1);
 });
