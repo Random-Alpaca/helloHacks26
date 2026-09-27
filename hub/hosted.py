@@ -44,10 +44,13 @@ def student_id(key):
     return hashlib.sha256(key.encode()).hexdigest()
 
 
-def origin_ok(origin):
-    """State-changing requests: our own site, the extension's service
-    worker, or no Origin at all (a non-browser client)."""
-    return not origin or origin == ALLOWED_ORIGIN or origin.startswith(EXTENSION_SCHEME)
+def origin_ok(origin, host=None):
+    """State-changing requests: our own site (same-origin, checked against
+    the request's own Host so this works on any deployment - the team's,
+    a fork, a preview URL - not just ALLOWED_ORIGIN), the extension's
+    service worker, or no Origin at all (a non-browser client)."""
+    return (not origin or origin == ALLOWED_ORIGIN or origin.startswith(EXTENSION_SCHEME)
+            or (host and origin == f"https://{host}"))
 
 
 def bearer_key(headers):
@@ -167,7 +170,7 @@ class Glue:
 
     def _read_json(self, limit):
         """The parsed body, or None after answering the error itself."""
-        if not origin_ok(self.headers.get("Origin")):
+        if not origin_ok(self.headers.get("Origin"), self.headers.get("Host")):
             return self._json({"error": "forbidden origin"}, 403)
         if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
             return self._json({"error": "expected Content-Type: application/json"}, 415)

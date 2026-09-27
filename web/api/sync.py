@@ -49,7 +49,7 @@ class handler(hosted.Glue, BaseHTTPRequestHandler):
     def do_DELETE(self):
         if not db.hosted_url():
             return self._json(hosted.UNCONFIGURED, 503)
-        if not hosted.origin_ok(self.headers.get("Origin")):
+        if not hosted.origin_ok(self.headers.get("Origin"), self.headers.get("Host")):
             return self._json({"error": "forbidden origin"}, 403)
         student = self._student()
         if not student:
