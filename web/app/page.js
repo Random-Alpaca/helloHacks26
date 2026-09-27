@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   connectCanvas,
   connectPrairieLearn,
@@ -126,7 +126,7 @@ function QuickActions({ sampleMode, onSampleModeChange, onConnected, onWorkdayIm
         <input type="text" value={term} onChange={(e) => setTerm(e.target.value)} size={7} className="rounded-md border border-[var(--line)] bg-[var(--surface-soft)] px-2 py-1 text-xs" />
         <label className="toggle-pill flex-1 justify-center text-center">
           Import Workday
-          <input type="file" accept=".xlsx" onChange={handleFile} className="hidden" />
+          <input type="file" accept=".xlsx" onChange={handleFile} className="sr-only" />
         </label>
       </div>
       {status && <div className="mt-2 text-xs text-[var(--muted)]">{status}</div>}
@@ -218,6 +218,7 @@ export default function App() {
   const [fetchedCourses, setFetchedCourses] = useState([]);
   const [importedCourses, setImportedCourses] = useState([]);
   const [loadError, setLoadError] = useState(null);
+  const loadRequestId = useRef(0);
 
   useEffect(() => {
     setTheme(localStorage.getItem("gather-theme") || "everforest");
@@ -237,12 +238,19 @@ export default function App() {
   }, [customColors]);
 
   async function load(useSample) {
+    // A slow local-mode response can land after the student has already
+    // flipped back to Sample (or vice versa) - a sequence number, not just
+    // "latest wins by promise order", so a stale response is dropped instead
+    // of overwriting what's now on screen with a mismatched useSample's data.
+    const requestId = ++loadRequestId.current;
     try {
       const [nextItems, nextCourses] = await Promise.all([fetchUpcoming(useSample), fetchCourses(useSample)]);
+      if (requestId !== loadRequestId.current) return;
       setItems(nextItems);
       setFetchedCourses(nextCourses);
       setLoadError(null);
     } catch (e) {
+      if (requestId !== loadRequestId.current) return;
       setItems([]);
       setFetchedCourses([]);
       setLoadError(e.message);
@@ -447,7 +455,7 @@ export default function App() {
                             <span>{item.course}</span><span>·</span><span>{item.kind}</span>
                           </div>
                         </div>
-                        <div className={`hidden shrink-0 rounded-lg px-3 py-2 text-right sm:block ${isOverdue(item, now) ? "due-now" : ""}`}>
+                        <div className={`shrink-0 rounded-lg px-2 py-1.5 text-right sm:px-3 sm:py-2 ${isOverdue(item, now) ? "due-now" : ""}`}>
                           <div className="text-xs font-bold">{formatDue(item.due)}</div>
                           <div className="mt-0.5 text-[0.7rem] text-[var(--muted)]">{displayLabel(item.urgency)}</div>
                         </div>
