@@ -71,11 +71,12 @@ const CUSTOM_COLOR_FIELDS = [
 
 const WEEKDAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
 
-function QuickActions({ sampleMode, onSampleModeChange, onConnected, onWorkdayImported }) {
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported }) {
   const [term, setTerm] = useState("2026W1");
-  const [status, setStatus] = useState(null);
+  const [workdayStatus, setWorkdayStatus] = useState(null);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
+  const byId = Object.fromEntries(connections.map((c) => [c.id, c]));
 
   async function handleFile(e) {
     const file = e.target.files[0];
@@ -83,11 +84,11 @@ function QuickActions({ sampleMode, onSampleModeChange, onConnected, onWorkdayIm
     if (!file) return;
     try {
       const buf = await file.arrayBuffer();
-      const courses = parseWorkdayCourses(buf, term);
-      onWorkdayImported(courses);
-      setStatus(`Imported ${courses.length} course${courses.length === 1 ? "" : "s"}.`);
+      const imported = parseWorkdayCourses(buf, term);
+      onWorkdayImported(imported);
+      setWorkdayStatus(`Imported ${imported.length} course${imported.length === 1 ? "" : "s"}.`);
     } catch (err) {
-      setStatus(null);
+      setWorkdayStatus(null);
       setError(err.message);
     }
   }
@@ -105,37 +106,6 @@ function QuickActions({ sampleMode, onSampleModeChange, onConnected, onWorkdayIm
     }
   }
 
-  return (
-    <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5 shadow-[var(--shadow-card)]">
-      <div className="mb-4 font-bold">Quick actions</div>
-      <label className="toggle-pill mb-3 flex w-full items-center justify-between">
-        <span>Sample data</span>
-        <input type="checkbox" checked={sampleMode} onChange={(e) => onSampleModeChange(e.target.checked)} />
-      </label>
-      {isLocalMode() && !sampleMode && (
-        <div className="mb-3 flex flex-col gap-2">
-          <AppButton disabled={busy !== null} onClick={() => run("canvas", connectCanvas)} className="toggle-pill justify-center">
-            {busy === "canvas" ? "Signing in…" : "Connect Canvas"}
-          </AppButton>
-          <AppButton disabled={busy !== null} onClick={() => run("prairielearn", connectPrairieLearn)} className="toggle-pill justify-center">
-            {busy === "prairielearn" ? "Signing in…" : "Connect PrairieLearn"}
-          </AppButton>
-        </div>
-      )}
-      <div className="flex items-center gap-2">
-        <input type="text" value={term} onChange={(e) => setTerm(e.target.value)} size={7} className="rounded-md border border-[var(--line)] bg-[var(--surface-soft)] px-2 py-1 text-xs" />
-        <label className="toggle-pill flex-1 justify-center text-center">
-          Import Workday
-          <input type="file" accept=".xlsx" onChange={handleFile} className="hidden" />
-        </label>
-      </div>
-      {status && <div className="mt-2 text-xs text-[var(--muted)]">{status}</div>}
-      {error && <div className="connect-error mt-2">{error}</div>}
-    </section>
-  );
-}
-
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections }) {
   return (
     <div className="max-w-2xl space-y-6">
       <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
@@ -184,20 +154,65 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
             ? "What's actually feeding your dashboard right now."
             : "This is the hosted demo, so Canvas and PrairieLearn can't connect here - run Hub locally to link a real account (see the README)."}
         </div>
+
+        <label className="toggle-pill mb-5 flex w-full items-center justify-between">
+          <span>Sample data</span>
+          <input type="checkbox" checked={sampleMode} onChange={(e) => onSampleModeChange(e.target.checked)} />
+        </label>
+
         <div className="divide-y divide-[var(--line)]">
-          {connections.map((c) => (
-            <div key={c.id} className="flex items-center justify-between py-3">
-              <div className="flex items-center gap-3">
-                <span className={`size-2.5 rounded-full ${c.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
-                <span className="font-bold">{c.label}</span>
-              </div>
-              <div className="text-right text-sm">
-                <div className={c.connected ? "font-bold text-[var(--success)]" : "text-[var(--muted)]"}>{c.connected ? "Connected" : "Not connected"}</div>
-                <div className="text-xs text-[var(--muted)]">{c.detail}</div>
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className={`size-2.5 rounded-full ${byId.canvas.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div>
+                <div className="font-bold">Canvas</div>
+                <div className="text-xs text-[var(--muted)]">{byId.canvas.connected ? "Connected" : "Not connected"} &middot; {byId.canvas.detail}</div>
               </div>
             </div>
-          ))}
+            {isLocalMode() && !sampleMode && (
+              <AppButton disabled={busy !== null} onClick={() => run("canvas", connectCanvas)} className="toggle-pill">
+                {busy === "canvas" ? "Signing in…" : byId.canvas.connected ? "Reconnect" : "Connect"}
+              </AppButton>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className={`size-2.5 rounded-full ${byId.prairielearn.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div>
+                <div className="font-bold">PrairieLearn</div>
+                <div className="text-xs text-[var(--muted)]">{byId.prairielearn.connected ? "Connected" : "Not connected"} &middot; {byId.prairielearn.detail}</div>
+              </div>
+            </div>
+            {isLocalMode() && !sampleMode && (
+              <AppButton disabled={busy !== null} onClick={() => run("prairielearn", connectPrairieLearn)} className="toggle-pill">
+                {busy === "prairielearn" ? "Signing in…" : byId.prairielearn.connected ? "Reconnect" : "Connect"}
+              </AppButton>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className={`size-2.5 rounded-full ${byId.workday.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div>
+                <div className="font-bold">Workday</div>
+                <div className="text-xs text-[var(--muted)]">{byId.workday.connected ? "Imported" : "Not imported"} &middot; {byId.workday.detail}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <input type="text" value={term} onChange={(e) => setTerm(e.target.value)} size={7} aria-label="Term" className="rounded-md border border-[var(--line)] bg-[var(--surface-soft)] px-2 py-1 text-xs" />
+              <label className="toggle-pill cursor-pointer">
+                Import .xlsx
+                <input type="file" accept=".xlsx" onChange={handleFile} className="hidden" />
+              </label>
+            </div>
+          </div>
         </div>
+        {isLocalMode() && sampleMode && (
+          <div className="mt-3 text-xs text-[var(--muted)]">Turn off Sample data above to connect a real Canvas or PrairieLearn account.</div>
+        )}
+        {workdayStatus && <div className="mt-3 text-xs text-[var(--muted)]">{workdayStatus}</div>}
+        {error && <div className="connect-error mt-3">{error}</div>}
       </section>
     </div>
   );
@@ -332,7 +347,17 @@ export default function App() {
 
         <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
           {activeNav === "Settings" ? (
-            <SettingsPage theme={theme} setTheme={setTheme} customColors={customColors} setCustomColors={setCustomColors} connections={connections} />
+            <SettingsPage
+              theme={theme}
+              setTheme={setTheme}
+              customColors={customColors}
+              setCustomColors={setCustomColors}
+              connections={connections}
+              sampleMode={sampleMode}
+              onSampleModeChange={setSampleMode}
+              onConnected={() => load(false)}
+              onWorkdayImported={importWorkdayCourses}
+            />
           ) : (
           <>
           <section className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
@@ -485,12 +510,9 @@ export default function App() {
                 )}
               </section>
 
-              <QuickActions
-                sampleMode={sampleMode}
-                onSampleModeChange={setSampleMode}
-                onConnected={() => load(false)}
-                onWorkdayImported={importWorkdayCourses}
-              />
+              <AppButton onClick={() => setActiveNav("Settings")} className="toggle-pill w-full justify-center">
+                Manage connections in Settings
+              </AppButton>
             </aside>
           </div>
           </>
