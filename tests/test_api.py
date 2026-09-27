@@ -1,11 +1,12 @@
 import functools
 import threading
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 
 from hub import db
-from hub.api import ALLOWED_ORIGIN, Handler, _upcoming
+from hub.api import ALLOWED_ORIGIN, Handler, _announcements, _upcoming
 from hub.models import Course, Item
 
 NOW = datetime.now(timezone.utc)
@@ -40,6 +41,19 @@ def test_sorted_most_urgent_first():
     db.save(conn, [COURSE], [quiet, urgent])
     rows = _upcoming(conn)
     assert rows[0]["title"] == "Final exam"
+
+
+def test_announcements_excludes_undated_items_that_are_not_announcements():
+    # An undated Canvas assignment (hub/canvas.py's to_undated_item, #43) or
+    # an unopened PrairieLearn assessment has no due date either, and used to
+    # leak into this feed looking like an announcement.
+    conn = db.connect(":memory:")
+    announcement = Item(course="CPSC 121", category="task", kind="announcement", title="Welcome!",
+                         due=None, url="https://x/a", source="canvas")
+    undated_assignment = Item(course="CPSC 121", category="task", kind="assignment", title="Reading response",
+                               due=None, url="https://x/b", source="canvas")
+    db.save(conn, [COURSE], [announcement, undated_assignment])
+    assert [r["title"] for r in _announcements(conn)] == ["Welcome!"]
 
 
 def _running_server(tmp_path, monkeypatch):
@@ -84,5 +98,85 @@ def test_options_preflight(tmp_path, monkeypatch):
             assert res.status == 204
             assert res.headers["Access-Control-Allow-Origin"] == ALLOWED_ORIGIN
             assert "POST" in res.headers["Access-Control-Allow-Methods"]
+    finally:
+        server.shutdown()
+
+
+def test_post_from_a_foreign_origin_is_rejected_before_doing_anything(tmp_path, monkeypatch):
+    # DNS rebinding: a page on an attacker domain that resolves to 127.0.0.1
+    # would otherwise be able to trigger a real /api/feed fetch or Canvas
+    # login. The 403 must land before the endpoint runs, not just be hidden
+    # from a browser reading the response via CORS.
+    server = _running_server(tmp_path, monkeypatch)
+    try:
+        port = server.server_address[1]
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/feed", method="POST",
+            data=b'{"url": "https://canvas.ubc.ca/feeds/calendars/x.ics"}',
+            headers={"Origin": "http://evil.example", "Content-Type": "application/json"},
+        )
+        try:
+            urllib.request.urlopen(req)
+            assert False, "expected HTTPError"
+        except urllib.error.HTTPError as e:
+            assert e.code == 403
+    finally:
+        server.shutdown()
+
+
+def test_post_with_no_origin_header_is_allowed_through(tmp_path, monkeypatch):
+    # A non-browser client (curl, a script) never sends an Origin header at
+    # all - only a browser always does, so this must not be blocked as if it
+    # were a forged one.
+    server = _running_server(tmp_path, monkeypatch)
+    try:
+        port = server.server_address[1]
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/feed", method="POST",
+            data=b'{"url": "https://evil.example.com/feed.ics"}',
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urllib.request.urlopen(req)
+            assert False, "expected HTTPError"
+        except urllib.error.HTTPError as e:
+            # Rejected by the feed host allowlist, not by the origin check.
+            assert e.code == 400
+    finally:
+        server.shutdown()
+
+
+def test_malformed_json_body_returns_400_not_a_crash(tmp_path, monkeypatch):
+    server = _running_server(tmp_path, monkeypatch)
+    try:
+        port = server.server_address[1]
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/feed", method="POST",
+            data=b"not json", headers={"Origin": ALLOWED_ORIGIN, "Content-Type": "application/json"},
+        )
+        try:
+            urllib.request.urlopen(req)
+            assert False, "expected HTTPError"
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
+    finally:
+        server.shutdown()
+
+
+def test_non_object_json_body_returns_400_not_a_crash(tmp_path, monkeypatch):
+    # A JSON array or string is valid JSON but has no .get("url") - .get()
+    # on a list crashes the handler instead of a clean 400.
+    server = _running_server(tmp_path, monkeypatch)
+    try:
+        port = server.server_address[1]
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/feed", method="POST",
+            data=b'["not", "an", "object"]', headers={"Origin": ALLOWED_ORIGIN, "Content-Type": "application/json"},
+        )
+        try:
+            urllib.request.urlopen(req)
+            assert False, "expected HTTPError"
+        except urllib.error.HTTPError as e:
+            assert e.code == 400
     finally:
         server.shutdown()

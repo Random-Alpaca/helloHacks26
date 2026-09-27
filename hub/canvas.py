@@ -9,6 +9,7 @@ Try it:  uv run python -m hub.canvas
 """
 import json
 from datetime import date, datetime, timedelta
+from urllib.parse import urljoin
 
 from hub import site
 from hub.models import Course, Item, category_for
@@ -73,9 +74,23 @@ def to_item(p, course_codes):
         kind=kind,
         title=(p.get("plannable") or {}).get("title", ""),
         due=datetime.fromisoformat(due) if due else None,
-        url=BASE + p.get("html_url", ""),
+        # planner/items' html_url is relative for assignments but already-absolute
+        # for calendar events - urljoin leaves an absolute one alone instead of
+        # double-prefixing it with BASE (was breaking every event deep link).
+        url=urljoin(BASE, p.get("html_url", "")),
         source="canvas",
         done=done_from_submissions(p),
+    )
+
+
+def to_undated_item(a, course_code):
+    """/courses/:id/assignments row with no due date - planner/items never
+    returns these at all (#15), so a no-due-date assignment used to just
+    vanish. due=None either way; hub.db still shows it, just unsorted."""
+    return Item(
+        course=course_code, category=category_for("assignment"), kind="assignment",
+        title=a.get("name", ""), due=None, url=urljoin(BASE, a.get("html_url", "")),
+        source="canvas", done=a.get("has_submitted_submissions"),
     )
 
 
@@ -103,7 +118,14 @@ def _run(req, start, end):
     codes = {c["id"]: c.get("course_code", "") for c in raw}
     plan = site.get_all(req, f"{BASE}/api/v1/planner/items", {
         "start_date": start.isoformat(), "end_date": end.isoformat(), "per_page": 100}, unwrap)
-    return courses, [to_item(p, codes) for p in plan]
+    items = [to_item(p, codes) for p in plan]
+    # ponytail: one extra call per course to catch undated assignments
+    # planner/items drops entirely - fine at hackathon scale, batch/parallelize
+    # if course counts ever make this slow.
+    for c in raw:
+        assignments = site.get_all(req, f"{BASE}/api/v1/courses/{c['id']}/assignments", {"per_page": 100}, unwrap)
+        items += [to_undated_item(a, codes.get(c["id"], "")) for a in assignments if not a.get("due_at")]
+    return courses, items
 
 
 if __name__ == "__main__":
