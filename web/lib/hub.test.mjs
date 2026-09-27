@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hideCourseItems, mergeItems, mergeMeetings, selectConnections, selectVisibleCourses } from "./hub.js";
+import { hideCourseItems, mergeItems, mergeMeetings, monthGrid, parsePreferredKinds, selectConnections, selectItemsDueOn, selectMeetingsOn, selectVisibleCourses, sortItems } from "./hub.js";
 
 test("selectConnections: no data means nothing is connected", () => {
   const connections = selectConnections([], []);
@@ -79,4 +79,79 @@ test("mergeMeetings: keeps distinct weekly slots and updates matching ones", () 
   const merged = mergeMeetings(base, incoming);
   assert.equal(merged.length, 2);
   assert.equal(merged.find((m) => m.kind === "lecture").location, "New room");
+});
+
+test("monthGrid: always 6 full weeks of 7 days, padded into neighbouring months", () => {
+  const weeks = monthGrid(new Date(2026, 1, 1)); // February 2026
+  assert.equal(weeks.length, 6);
+  for (const week of weeks) assert.equal(week.length, 7);
+  assert.equal(weeks[0][0].date.getMonth(), 0); // padded from January
+  assert.ok(weeks.flat().some((cell) => cell.inMonth && cell.date.getDate() === 1));
+});
+
+test("selectItemsDueOn: only items due that calendar day, sorted, done items excluded by the caller", () => {
+  const day = new Date(2026, 2, 15, 9, 0);
+  const items = [
+    { id: 1, due: new Date(2026, 2, 15, 23, 0).toISOString(), urgency: "low" },
+    { id: 2, due: new Date(2026, 2, 15, 8, 0).toISOString(), urgency: "overdue" },
+    { id: 3, due: new Date(2026, 2, 16, 8, 0).toISOString(), urgency: "overdue" },
+  ];
+  const due = selectItemsDueOn(items, day);
+  assert.deepEqual(due.map((i) => i.id), [2, 1]); // overdue ranks before low, matches sortItems
+});
+
+test("selectMeetingsOn: matches a Meeting's weekday, sorted by start time, within its term", () => {
+  const meetings = [
+    { course: "CPSC 121", kind: "lecture", days: ["MO", "WE", "FR"], startTime: "10:00", endTime: "11:00", termStart: "2026-09-08", termEnd: "2026-12-05" },
+    { course: "CPSC 121", kind: "lab", days: ["MO"], startTime: "09:00", endTime: "10:00", termStart: "2026-09-08", termEnd: "2026-12-05" },
+    { course: "MATH 100", kind: "lecture", days: ["TU", "TH"], startTime: "13:00", endTime: "14:00", termStart: "2026-09-08", termEnd: "2026-12-05" },
+  ];
+  const monday = new Date(2026, 8, 14); // a Monday within term
+  const found = selectMeetingsOn(meetings, monday);
+  assert.deepEqual(found.map((m) => m.kind), ["lab", "lecture"]); // 09:00 before 10:00
+  assert.equal(selectMeetingsOn(meetings, new Date(2026, 8, 19)).length, 0); // Saturday - nothing meets weekends
+});
+
+test("selectMeetingsOn: excludes a matching weekday outside the meeting's term range", () => {
+  const meetings = [
+    { course: "CPSC 121", kind: "lecture", days: ["MO"], startTime: "10:00", endTime: "11:00", termStart: "2026-09-08", termEnd: "2026-12-05" },
+  ];
+  const beforeTerm = new Date(2026, 7, 3); // a Monday, but before termStart
+  const afterTerm = new Date(2026, 11, 14); // a Monday, but after termEnd
+  assert.deepEqual(selectMeetingsOn(meetings, beforeTerm), []);
+  assert.deepEqual(selectMeetingsOn(meetings, afterTerm), []);
+});
+
+test("parsePreferredKinds: empty/missing cookie value means nothing preferred", () => {
+  assert.deepEqual(parsePreferredKinds(""), new Set());
+  assert.deepEqual(parsePreferredKinds(undefined), new Set());
+});
+
+test("parsePreferredKinds: drops unknown ids so a stale/tampered cookie can't inject junk", () => {
+  const kinds = parsePreferredKinds("exam,made-up,quiz");
+  assert.deepEqual(kinds, new Set(["exam", "quiz"]));
+});
+
+test("sortItems: preferredKinds only re-orders within an urgency band, never across bands", () => {
+  const items = [
+    { id: 1, kind: "reading", urgency: "high", due: "2026-01-01T00:00:00Z" },
+    { id: 2, kind: "quiz", urgency: "high", due: "2026-01-02T00:00:00Z" },
+    { id: 3, kind: "exam", urgency: "critical", due: "2026-01-05T00:00:00Z" },
+  ];
+  const sorted = sortItems(items, new Set(["quiz"]));
+  // critical still comes first even though it's not preferred - band beats preference.
+  assert.equal(sorted[0].id, 3);
+  // within the "high" band, the preferred quiz jumps ahead of the earlier-due reading.
+  assert.equal(sorted[1].id, 2);
+  assert.equal(sorted[2].id, 1);
+});
+
+test("sortItems: no preferredKinds argument behaves exactly as before (due-date order within a band)", () => {
+  const items = [
+    { id: 1, kind: "reading", urgency: "high", due: "2026-01-02T00:00:00Z" },
+    { id: 2, kind: "quiz", urgency: "high", due: "2026-01-01T00:00:00Z" },
+  ];
+  const sorted = sortItems(items);
+  assert.equal(sorted[0].id, 2);
+  assert.equal(sorted[1].id, 1);
 });

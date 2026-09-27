@@ -20,13 +20,19 @@ import {
   mergeCourses,
   mergeItems,
   mergeMeetings,
+  monthGrid,
+  PREFERRED_KIND_OPTIONS,
+  readPreferredKindsCookie,
   selectActiveItems,
   selectConnections,
   selectCourseItems,
+  selectItemsDueOn,
+  selectMeetingsOn,
   selectNextUp,
   selectVisibleCourses,
   selectVisibleItems,
   weekDates,
+  writePreferredKindsCookie,
 } from "../lib/hub";
 import { parseWorkdayCourses, parseWorkdaySchedule } from "../lib/workday";
 
@@ -41,7 +47,6 @@ function Icon({ name, className = "size-5" }) {
     check: <path d="m5 12 4 4L19 6" />,
     arrow: <><path d="M5 12h14M13 6l6 6-6 6" /></>,
     menu: <><path d="M4 7h16M4 12h16M4 17h16" /></>,
-    spark: <><path d="m12 3 1.3 4.2L17 9l-3.7 1.8L12 15l-1.3-4.2L7 9l3.7-1.8L12 3Z" /><path d="m5 14 .7 2.3L8 17l-2.3.7L5 20l-.7-2.3L2 17l2.3-.7L5 14Z" /></>,
     settings: <><path d="M4 6h10M18 6h2M4 18h10M18 18h2M4 12h4M12 12h8" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="16" cy="18" r="2" /></>,
     material: <><path d="M7 3h7l4 4v14H7z" /><path d="M14 3v4h4M9 12h6M9 16h6" /></>,
     announcement: <><path d="M9 5 3 9v6h6l6 4V1z" /><path d="M16 8a4.5 4.5 0 0 1 0 8" /></>,
@@ -123,8 +128,110 @@ const CUSTOM_COLOR_FIELDS = [
 
 const WEEKDAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
 const MAX_WORKDAY_FILE_BYTES = 5_000_000;
+const MONTH_WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed }) {
+// The Calendar nav tab's own page: a month grid of every active item's due
+// date, plus the clicked day's items below. Owns its own displayed-month and
+// selected-day state rather than lifting it into App(), since nothing else
+// in the app needs to know which day is selected here.
+function CalendarSection({ items, meetings, now }) {
+  const [monthDate, setMonthDate] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
+  const [selectedDate, setSelectedDate] = useState(null);
+
+  const weeks = useMemo(() => monthGrid(monthDate), [monthDate]);
+  const daySchedule = useMemo(() => (selectedDate ? selectMeetingsOn(meetings, selectedDate) : []), [meetings, selectedDate]);
+
+  function shiftMonth(delta) {
+    setMonthDate((d) => new Date(d.getFullYear(), d.getMonth() + delta, 1));
+  }
+
+  function goToday() {
+    setMonthDate(new Date(now.getFullYear(), now.getMonth(), 1));
+  }
+
+  return (
+    <>
+      <div className="flex flex-col gap-4 border-b border-[var(--line)] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+        <div>
+          <div className="text-xl font-bold tracking-tight">
+            {monthDate.toLocaleDateString("en-CA", { month: "long", year: "numeric" })}
+          </div>
+          <div className="mt-1 text-sm text-[var(--muted)]">Deadlines across every connected course</div>
+        </div>
+        <div className="flex items-center gap-1">
+          <AppButton ariaLabel="Previous month" onClick={() => shiftMonth(-1)} className="icon-button">
+            <Icon name="arrow" className="size-4 rotate-180" />
+          </AppButton>
+          <AppButton onClick={goToday} className="filter-button">Today</AppButton>
+          <AppButton ariaLabel="Next month" onClick={() => shiftMonth(1)} className="icon-button">
+            <Icon name="arrow" className="size-4" />
+          </AppButton>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-6 p-5 sm:flex-row sm:p-6">
+        <div className="min-w-0 flex-1">
+          <div className="grid grid-cols-7 gap-1 text-center">
+            {MONTH_WEEKDAY_LABELS.map((label) => (
+              <div key={label} className="pb-2 text-[0.65rem] font-bold text-[var(--muted)]">{label}</div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {weeks.flat().map(({ date, inMonth }) => {
+              const dueCount = selectItemsDueOn(items, date).length;
+              const isToday = date.toDateString() === now.toDateString();
+              const isSelected = selectedDate && date.toDateString() === selectedDate.toDateString();
+              return (
+                <button
+                  key={date.toISOString()}
+                  type="button"
+                  aria-label={date.toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" })}
+                  onClick={() => setSelectedDate(date)}
+                  className={`flex aspect-square flex-col items-center justify-center gap-1 rounded-lg text-sm font-semibold transition-colors hover:bg-[var(--surface-soft)] ${
+                    inMonth ? "text-[var(--ink)]" : "text-[var(--muted-light)]"
+                  } ${isToday ? "bg-[var(--accent-soft)] text-[var(--accent)]" : ""} ${
+                    isSelected ? "ring-2 ring-[var(--accent)] ring-inset" : ""
+                  }`}
+                >
+                  <span>{date.getDate()}</span>
+                  {dueCount > 0 && <span className="size-1.5 rounded-full bg-[var(--accent)]" />}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {selectedDate && (
+          <div className="w-full shrink-0 rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4 sm:w-64">
+            <div className="mb-3 flex items-start justify-between gap-2">
+              <div className="text-sm font-bold">
+                {selectedDate.toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" })}
+              </div>
+              <AppButton ariaLabel="Close daily schedule" onClick={() => setSelectedDate(null)} className="icon-button">
+                <span className="block text-xs font-bold leading-none">&times;</span>
+              </AppButton>
+            </div>
+            <div className="space-y-2">
+              {daySchedule.length === 0 ? (
+                <div className="text-xs text-[var(--muted)]">No classes scheduled - import your Workday &quot;Current Schedule&quot; export in Settings.</div>
+              ) : (
+                daySchedule.map((m, idx) => (
+                  <div key={idx} className="rounded-lg border border-[var(--line)] bg-[var(--surface)] p-2.5">
+                    <div className="truncate text-xs font-bold">{m.course}</div>
+                    <div className="mt-0.5 text-[0.7rem] text-[var(--muted)]">{m.kind} &middot; {m.startTime}&ndash;{m.endTime}</div>
+                    {m.location && <div className="truncate text-[0.7rem] text-[var(--muted)]">{m.location}</div>}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
   const [customDomain, setCustomDomain] = useState("");
@@ -184,6 +291,25 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
 
   return (
     <div className="max-w-2xl space-y-6">
+      <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
+        <div className="mb-1 text-xl font-bold tracking-tight">What matters to you</div>
+        <div className="mb-5 text-sm text-[var(--muted)]">
+          Pick the kinds of work you personally treat as most urgent. Matching items get a Priority badge and move to the front of their urgency group - it doesn&apos;t change the urgency itself.
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {PREFERRED_KIND_OPTIONS.map((option) => (
+            <label key={option.id} className="toggle-pill">
+              <input
+                type="checkbox"
+                checked={preferredKinds.has(option.id)}
+                onChange={() => onTogglePreferredKind(option.id)}
+              />
+              {option.label}
+            </label>
+          ))}
+        </div>
+      </section>
+
       <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
         <div className="mb-1 text-xl font-bold tracking-tight">Appearance</div>
         <div className="mb-5 text-sm text-[var(--muted)]">Pick a color scheme, or build your own.</div>
@@ -436,12 +562,14 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
 export default function App() {
   const [activeNav, setActiveNav] = useState("Overview");
   const [activeFilter, setActiveFilter] = useState("All");
+  const [courseMenuOpen, setCourseMenuOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [mobileNav, setMobileNav] = useState(false);
   const [hideOverdue, setHideOverdue] = useState(false);
   const [showN, setShowN] = useState(10);
   const [theme, setTheme] = useState("everforest");
   const [customColors, setCustomColors] = useState(DEFAULT_CUSTOM_COLORS);
+  const [preferredKinds, setPreferredKinds] = useState(new Set());
 
   // First-time default: off in local mode (a local run means someone's about
   // to connect a real account, so show that path immediately rather than
@@ -482,6 +610,7 @@ export default function App() {
     } catch {
       // ignore malformed/missing storage - keep the default (nothing hidden)
     }
+    setPreferredKinds(readPreferredKindsCookie());
     // The feed URL is a secret (works like a password) - localStorage only,
     // never sent anywhere but /api/feed. Re-fetches automatically on every
     // load so a saved connection keeps working without re-pasting the link.
@@ -501,6 +630,17 @@ export default function App() {
         });
     }
   }, []);
+
+  function togglePreferredKind(kindId) {
+    setPreferredKinds((prev) => {
+      const next = new Set(prev);
+      if (next.has(kindId)) next.delete(kindId);
+      else next.add(kindId);
+      writePreferredKindsCookie(next);
+      return next;
+    });
+  }
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("gather-theme", theme);
@@ -607,7 +747,7 @@ export default function App() {
   }, [activeItems, search]);
 
   const filteredByCourse = activeFilter === "All" ? searched : searched.filter((item) => item.course === activeFilter);
-  const visible = selectVisibleItems(filteredByCourse, { tab: activeNavTab, hideOverdue, showN, now });
+  const visible = selectVisibleItems(filteredByCourse, { tab: activeNavTab, hideOverdue, showN, now, preferredKinds });
 
   const searchedAnnouncements = useMemo(() => {
     const visibleAnnouncementsBase = hideCourseItems(announcements, hiddenCourses);
@@ -617,8 +757,8 @@ export default function App() {
   }, [announcements, hiddenCourses, search]);
   const visibleAnnouncements = (activeFilter === "All" ? searchedAnnouncements : searchedAnnouncements.filter((item) => item.course === activeFilter)).slice(0, showN);
 
-  const topAssignments = selectVisibleItems(activeItems, { tab: "all", hideOverdue: false, showN: 5, now });
-  const nextUp = selectNextUp(activeItems);
+  const topAssignments = selectVisibleItems(activeItems, { tab: "all", hideOverdue: false, showN: 5, now, preferredKinds });
+  const nextUp = selectNextUp(activeItems, preferredKinds);
   const days = weekDates(now);
   const connections = selectConnections(allItems, importedCourses);
 
@@ -707,6 +847,8 @@ export default function App() {
               feedError={feedError}
               onConnectFeed={connectCanvasFeed}
               onDisconnectFeed={disconnectCanvasFeed}
+              preferredKinds={preferredKinds}
+              onTogglePreferredKind={togglePreferredKind}
             />
           ) : activeNav === "Schedule" ? (
             <section className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-card)]">
@@ -721,7 +863,6 @@ export default function App() {
           <section className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
             <div>
               <div className="mb-2 flex items-center gap-2 text-sm font-bold text-[var(--accent)]">
-                <Icon name="spark" className="size-4" />
                 {now.toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" })}
               </div>
               <div className="text-3xl font-bold tracking-tight sm:text-4xl">
@@ -735,35 +876,37 @@ export default function App() {
 
           {loadError && <p className="connect-error mb-4">Couldn&apos;t load: {loadError}</p>}
 
-          <section className="mb-8 grid gap-4 sm:grid-cols-3">
-            <div className="stat-card stat-card-featured">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="text-sm font-semibold text-white/70">Due this week</div>
-                  <div className="mt-3 text-4xl font-bold tracking-tight">{dueThisWeekCount}</div>
+          {activeNav !== "Calendar" && (
+            <section className="mb-8 grid gap-4 sm:grid-cols-3">
+              <div className="stat-card stat-card-featured">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-white/70">Due this week</div>
+                    <div className="mt-3 text-4xl font-bold tracking-tight">{dueThisWeekCount}</div>
+                  </div>
+                  <div className="rounded-xl bg-white/10 p-2.5"><Icon name="tasks" /></div>
                 </div>
-                <div className="rounded-xl bg-white/10 p-2.5"><Icon name="tasks" /></div>
               </div>
-            </div>
-            <div className="stat-card">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="text-sm font-semibold text-[var(--muted)]">Completed</div>
-                  <div className="mt-3 text-4xl font-bold tracking-tight">{doneCount}</div>
+              <div className="stat-card">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-[var(--muted)]">Completed</div>
+                    <div className="mt-3 text-4xl font-bold tracking-tight">{doneCount}</div>
+                  </div>
+                  <div className="rounded-xl bg-[var(--success-soft)] p-2.5 text-[var(--success)]"><Icon name="check" /></div>
                 </div>
-                <div className="rounded-xl bg-[var(--success-soft)] p-2.5 text-[var(--success)]"><Icon name="check" /></div>
               </div>
-            </div>
-            <div className="stat-card">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="text-sm font-semibold text-[var(--muted)]">Overdue</div>
-                  <div className="mt-3 text-4xl font-bold tracking-tight">{overdueCount}</div>
+              <div className="stat-card">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-[var(--muted)]">Overdue</div>
+                    <div className="mt-3 text-4xl font-bold tracking-tight">{overdueCount}</div>
+                  </div>
+                  <div className="rounded-xl bg-[var(--danger-soft)] p-2.5 text-[var(--danger)]"><Icon name="clock" /></div>
                 </div>
-                <div className="rounded-xl bg-[var(--danger-soft)] p-2.5 text-[var(--danger)]"><Icon name="clock" /></div>
               </div>
-            </div>
-          </section>
+            </section>
+          )}
 
           <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_19rem]">
             <section className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-card)]">
@@ -781,7 +924,10 @@ export default function App() {
                       <div key={item.id} className="assignment-row">
                         <span className="course-mark">{item.course.slice(0, 2)}</span>
                         <div className="min-w-0 flex-1">
-                          <div className="truncate font-bold">{item.title}</div>
+                          <div className="truncate font-bold">
+                            {item.title}
+                            {preferredKinds.has(item.kind) && <span className="due-soon ml-2 rounded-md px-1.5 py-0.5 text-[0.65rem] font-bold align-middle">Priority</span>}
+                          </div>
                           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-[var(--muted)]">
                             <span>{item.course}</span><span>·</span><span>{item.kind}</span>
                             {/* The boxed due-date badge below is sm:+ only - repeat it as
@@ -803,6 +949,8 @@ export default function App() {
                     )}
                   </div>
                 </>
+              ) : activeNav === "Calendar" ? (
+                <CalendarSection items={activeItems} meetings={meetings} now={now} />
               ) : (
               <>
               <div className="flex flex-col gap-4 border-b border-[var(--line)] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
@@ -812,10 +960,29 @@ export default function App() {
                   </div>
                   <div className="mt-1 text-sm text-[var(--muted)]">Everything due across your connected platforms</div>
                 </div>
-                <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl bg-[var(--surface-soft)] p-1">
-                  {[{ id: "All", label: "All courses" }, ...courses.map((c) => ({ id: c.code, label: c.code }))].map((filter) => (
-                    <AppButton key={filter.id} onClick={() => setActiveFilter(filter.id)} className={`filter-button ${activeFilter === filter.id ? "filter-button-active" : ""}`}>{filter.label}</AppButton>
-                  ))}
+                <div className="relative shrink-0">
+                  <AppButton
+                    onClick={() => setCourseMenuOpen((open) => !open)}
+                    ariaLabel="Filter courses"
+                    className="flex items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface)] px-3 py-2 text-xs font-bold"
+                  >
+                    <span>{activeFilter === "All" ? "All courses" : activeFilter}</span>
+                    <Icon name="arrow" className="size-3 rotate-90" />
+                  </AppButton>
+                  {courseMenuOpen && (
+                    <div className="absolute right-0 top-[calc(100%+8px)] z-10 w-48 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-1.5 shadow-[var(--shadow-card)]">
+                      {[{ id: "All", label: "All courses" }, ...courses.map((c) => ({ id: c.code, label: c.code }))].map((filter) => (
+                        <label key={filter.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm font-semibold hover:bg-[var(--surface-soft)]">
+                          <input
+                            type="checkbox"
+                            checked={activeFilter === filter.id}
+                            onChange={() => { setActiveFilter(filter.id); setCourseMenuOpen(false); }}
+                          />
+                          <span>{filter.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -865,11 +1032,14 @@ export default function App() {
                         <div className="mb-3 text-xs text-[var(--muted)]">
                           {course.term} &middot; Grade: {course.grade == null ? "—" : `${course.grade}%`}
                         </div>
-                        {selectCourseItems(activeItems, course.code).map((item) => (
+                        {selectCourseItems(activeItems, course.code, preferredKinds).map((item) => (
                           <div key={item.id} className={`assignment-row ${isOverdue(item, now) ? "due-now" : ""}`}>
                             <span className="course-mark">{item.course.slice(0, 2)}</span>
                             <div className="min-w-0 flex-1">
-                              <div className="truncate font-bold">{item.title}</div>
+                              <div className="truncate font-bold">
+                                {item.title}
+                                {preferredKinds.has(item.kind) && <span className="due-soon ml-2 rounded-md px-1.5 py-0.5 text-[0.65rem] font-bold align-middle">Priority</span>}
+                              </div>
                               <div className="text-xs text-[var(--muted)]">{item.kind} &middot; {displayLabel(item.urgency)} &middot; {formatDue(item.due)}</div>
                             </div>
                             <a href={item.url} className="text-xs font-bold text-[var(--accent)]">open</a>
@@ -884,7 +1054,10 @@ export default function App() {
                       <div key={item.id} className="assignment-row">
                         <span className="course-mark">{item.course.slice(0, 2)}</span>
                         <div className="min-w-0 flex-1">
-                          <div className="truncate font-bold">{item.title}</div>
+                          <div className="truncate font-bold">
+                            {item.title}
+                            {preferredKinds.has(item.kind) && <span className="due-soon ml-2 rounded-md px-1.5 py-0.5 text-[0.65rem] font-bold align-middle">Priority</span>}
+                          </div>
                           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-[var(--muted)]">
                             <span>{item.course}</span><span>·</span><span>{item.kind}</span>
                             {/* The boxed due-date badge below is sm:+ only - repeat it as
