@@ -333,6 +333,19 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
               </label>
             </div>
           </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className="size-2.5 rounded-full bg-[var(--muted-light)]" />
+              <div>
+                <div className="font-bold">Bookstore</div>
+                <div className="text-xs text-[var(--muted)]">The Bookstore lists the books for your courses after you sign in with CWL.</div>
+              </div>
+            </div>
+            <a href="https://the.bookstore.ubc.ca/books/personalize-my-book-list-using-cwl" target="_blank" rel="noopener noreferrer" className="toggle-pill">
+              Your textbooks →
+            </a>
+          </div>
         </div>
         {isLocalMode() && sampleMode && (
           <div className="mt-3 text-xs text-[var(--muted)]">Turn off Sample data above to connect a real Canvas or PrairieLearn account.</div>
@@ -394,6 +407,7 @@ export default function App() {
   const [feedItems, setFeedItems] = useState([]);
   const [feedError, setFeedError] = useState(null);
   const loadRequestId = useRef(0);
+  const feedRequestId = useRef(0);
 
   useEffect(() => {
     setTheme(localStorage.getItem("gather-theme") || "everforest");
@@ -421,7 +435,17 @@ export default function App() {
     const savedFeedUrl = localStorage.getItem("gather-canvas-feed-url");
     if (savedFeedUrl) {
       setCanvasFeedUrl(savedFeedUrl);
-      fetchCanvasFeed(savedFeedUrl).then(setFeedItems).catch((e) => setFeedError(e.message));
+      const requestId = ++feedRequestId.current;
+      fetchCanvasFeed(savedFeedUrl)
+        .then((nextFeedItems) => {
+          if (requestId !== feedRequestId.current) return; // superseded by a connect/disconnect since
+          setFeedItems(nextFeedItems);
+        })
+        .catch(() => {
+          if (requestId !== feedRequestId.current) return;
+          // Generic message only - a server error must never put the feed URL (a secret) on screen.
+          setFeedError("Couldn't refresh your feed - it may have expired or changed.");
+        });
     }
   }, []);
   useEffect(() => {
@@ -443,7 +467,15 @@ export default function App() {
   }
 
   async function connectCanvasFeed(url) {
-    const nextFeedItems = await fetchCanvasFeed(url);
+    const requestId = ++feedRequestId.current;
+    let nextFeedItems;
+    try {
+      nextFeedItems = await fetchCanvasFeed(url);
+    } catch {
+      // Generic message only - a server error must never put the feed URL (a secret) on screen.
+      throw new Error("Couldn't load that feed - double check the link and try again.");
+    }
+    if (requestId !== feedRequestId.current) return; // superseded by a disconnect/another connect since
     setCanvasFeedUrl(url);
     setFeedItems(nextFeedItems);
     setFeedError(null);
@@ -451,6 +483,7 @@ export default function App() {
   }
 
   function disconnectCanvasFeed() {
+    feedRequestId.current++; // invalidate any in-flight fetch, so it can't overwrite this afterward
     setCanvasFeedUrl("");
     setFeedItems([]);
     setFeedError(null);

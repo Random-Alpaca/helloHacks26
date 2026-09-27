@@ -245,7 +245,12 @@ export function mergeItems(base, incoming) {
 // landing - see the board), never logged. Response shape isn't final yet;
 // this accepts either a bare item array or {items: [...]}.
 export async function fetchCanvasFeed(url) {
-  const res = await fetch("/api/feed", {
+  // Local mode's /api/feed lives on hub/api.py (a different origin, :8000),
+  // not this page's own origin - same reason every other local-mode call
+  // here goes through apiBase(). Hosted mode has no separate API origin
+  // (Vercel serves /api/feed itself), so the relative path is correct there.
+  const base = apiBase();
+  const res = await fetch(base ? `${base}/api/feed` : "/api/feed", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
