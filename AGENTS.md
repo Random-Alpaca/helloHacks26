@@ -141,6 +141,7 @@ hub/canvas.py       Canvas adapter (browser session → /api/v1 JSON)
 hub/ics.py          any .ics calendar feed (Canvas, Moodle, ...)
 hub/prairielearn.py PrairieLearn adapter (browser session → assessments page)
 hub/<provider>.py   future providers: add a file, touch nothing else
+web/                Next.js frontend, hosted Sample-mode demo on Vercel (app.py stays the local live-demo UI)
 fixtures/           sample JSON/.xlsx/.ics/.html for tests and UI work (fake data only)
 tests/test_*.py     pytest tests
 ```
