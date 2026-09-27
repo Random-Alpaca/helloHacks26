@@ -33,8 +33,9 @@ def _canonical_term(term):
     term - collapse to the short UBC form. "" stays "" (= unknown)."""
     # ponytail: only UBC's "<year> Winter|Summer Term <n>" spelling is mapped;
     # anything else is kept as-is. Add a pattern when a new source needs one.
-    m = re.fullmatch(r"(\d{4})\s+(Winter|Summer)\s+Term\s+(\d)", term.strip(), re.I)
-    return f"{m[1]}{m[2][0].upper()}{m[3]}" if m else term.strip()
+    term = (term or "").strip()  # Canvas can send term.name: null
+    m = re.fullmatch(r"(\d{4})\s+(Winter|Summer)\s+Term\s+(\d)", term, re.I)
+    return f"{m[1]}{m[2][0].upper()}{m[3]}" if m else term
 
 
 # ponytail: no migration for a hub.db that predates canonical course codes -
@@ -104,16 +105,29 @@ def _course_id(conn, course):
         # retake), this picks one arbitrarily; fine until we store history.
         row = conn.execute("SELECT id FROM courses WHERE code=? ORDER BY term = '' LIMIT 1", (code,)).fetchone()
         if row:
-            conn.execute("UPDATE courses SET title=?, grade=COALESCE(?, grade) WHERE id=?",
-                         (course.title, course.grade, row[0]))
+            conn.execute(
+                "UPDATE courses SET title=CASE WHEN length(?) < length(title) THEN ? ELSE title END, "
+                "grade=COALESCE(?, grade) WHERE id=?",
+                (course.title, course.title, course.grade, row[0]),
+            )
             return row[0]
     else:
         # A row saved earlier with an unknown term takes the real one now.
         conn.execute("UPDATE courses SET term=? WHERE code=? AND term='' AND NOT EXISTS "
                      "(SELECT 1 FROM courses WHERE code=? AND term=?)", (term, code, code, term))
+    # #41: a lecture and its lab shell canonicalise to one course row, so
+    # whichever is saved last must not blindly win. Grade: a known value
+    # survives an unknown one (COALESCE); when both are known, last wins -
+    # a separate question this doesn't decide. Title: shorter wins, on the
+    # (UBC) assumption that the lab shell's title, if it differs at all, is
+    # the lecture's with a suffix like "(Lab)" tacked on.
+    # ponytail: content-based, not source-based - revisit if a real account
+    # shows the lecture shell with the longer title.
     conn.execute(
         "INSERT INTO courses (code, term, title, grade) VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(code, term) DO UPDATE SET title=excluded.title, grade=COALESCE(excluded.grade, grade)",
+        "ON CONFLICT(code, term) DO UPDATE SET "
+        "title=CASE WHEN length(excluded.title) < length(courses.title) THEN excluded.title ELSE courses.title END, "
+        "grade=COALESCE(excluded.grade, grade)",
         (code, term, course.title, course.grade),
     )
     row = conn.execute("SELECT id FROM courses WHERE code=? AND term=?", (code, term)).fetchone()

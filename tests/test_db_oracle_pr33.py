@@ -66,6 +66,33 @@ def test_lab_shell_without_grade_does_not_erase_lecture_grade():
     assert [r[3] for r in rows] == [84.0], f"lecture grade 84 lost to the lab shell: {rows}"
 
 
+def test_lecture_and_lab_share_one_title_the_shorter_one_wins():
+    """Jacky's answer to #41 ("lecture and lab should be one course"): the
+    merge is right, but title needs the same explicit rule as grade instead
+    of last-write-wins. Rule: shorter title wins, since a lab shell that
+    differs at all tends to be the lecture's title with "(Lab)" tacked on.
+    Order-independent, unlike raw last-write-wins."""
+    conn = db.connect(":memory:")
+    lecture = Course(code="CPSC 121 101 2026W1", section="101", term="2026W1",
+                     title="Models of Computation")
+    lab = Course(code="CPSC 121 L1A 2026W1", section="L1A", term="2026W1",
+                 title="Models of Computation (Lab)")
+
+    db.save(conn, [lecture, lab])  # lecture first
+    assert [r[2] for r in _course_rows(conn, "CPSC 121")] == ["Models of Computation"]
+
+    conn2 = db.connect(":memory:")
+    db.save(conn2, [lab, lecture])  # lab first - same result either way
+    assert [r[2] for r in _course_rows(conn2, "CPSC 121")] == ["Models of Computation"]
+
+
+def test_none_term_does_not_crash_canonicalization():
+    # Canvas can send term.name: null; _canonical_term used to call .strip() on it.
+    conn = db.connect(":memory:")
+    db.save(conn, [Course(code="CPSC 121", section="", term=None, title="CPSC 121")])
+    assert [r[0] for r in _course_rows(conn, "CPSC 121")] == ["CPSC 121"]
+
+
 def test_orphaned_item_links_to_course_once_it_arrives():
     """An item saved before its course (course_id NULL) must be linked when
     it's saved again and the course is now known.
