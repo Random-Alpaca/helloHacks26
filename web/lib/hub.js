@@ -338,25 +338,74 @@ export function mergeItems(base, incoming) {
 
 // Canvas calendar-feed connect (#47) - works with no local backend at all,
 // so it's the only Canvas path that also works on the hosted Vercel site.
-// The feed URL is a secret (works like a password): kept in the browser's
-// own localStorage only, sent straight to /api/feed (Jacky's route, still
-// landing - see the board), never logged. Response shape isn't final yet;
-// this accepts either a bare item array or {items: [...]}.
-export async function fetchCanvasFeed(url) {
-  // Local mode's /api/feed lives on hub/api.py (a different origin, :8000),
-  // not this page's own origin - same reason every other local-mode call
-  // here goes through apiBase(). Hosted mode has no separate API origin
-  // (Vercel serves /api/feed itself), so the relative path is correct there.
+// The feed URL is a secret (works like a password): after one successful
+// POST it lives only in an httpOnly cookie scoped to /api/feed (see
+// hub/ics.py's feed_request()), so no script on this page can read it back.
+// Accepts either a bare item array or {items: [...]}.
+//
+// Local mode's /api/feed lives on hub/api.py (a different origin, :8000,
+// same site), so the cookie needs credentials "include" there; hosted mode
+// is this page's own origin, so "same-origin" is enough.
+function feedRequest(method, body, fetchImpl) {
   const base = apiBase();
-  const res = await fetch(base ? `${base}/api/feed` : "/api/feed", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url }),
-  });
+  const init = { method, credentials: base ? "include" : "same-origin" };
+  if (body !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(body);
+  }
+  return fetchImpl(base ? `${base}/api/feed` : "/api/feed", init);
+}
+
+async function feedRows(res) {
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(body.error || `POST /api/feed failed: ${res.status}`);
+  if (!res.ok) throw new Error(body.error || `/api/feed failed: ${res.status}`);
   const rows = Array.isArray(body) ? body : (body.items ?? []);
   return rows.map(normaliseApiItem);
+}
+
+// Connect: POST the pasted URL once. The server sets the cookie only if the
+// fetch worked; the caller should drop the URL right after.
+export async function connectCanvasFeed(url, fetchImpl = globalThis.fetch) {
+  return feedRows(await feedRequest("POST", { url }, fetchImpl));
+}
+
+// Refresh from the cookie. null = nothing connected (404), not an error.
+export async function refreshCanvasFeed(fetchImpl = globalThis.fetch) {
+  const res = await feedRequest("GET", undefined, fetchImpl);
+  if (res.status === 404) return null;
+  return feedRows(res);
+}
+
+// Disconnect: the server clears the cookie. Never throws.
+export async function disconnectCanvasFeed(fetchImpl = globalThis.fetch) {
+  try {
+    await feedRequest("DELETE", undefined, fetchImpl);
+  } catch {
+    // the UI has already forgotten the items; nothing else to undo
+  }
+}
+
+// One-time move off the old localStorage key: POST it so the server can set
+// the cookie, deleting the key first whatever happens, so the secret never
+// lingers in browser-readable storage. Resolves once the POST settles.
+export const LEGACY_FEED_KEY = "gather-canvas-feed-url";
+
+export async function migrateLegacyFeedUrl(storage, fetchImpl = globalThis.fetch) {
+  let url = null;
+  try {
+    url = storage.getItem(LEGACY_FEED_KEY);
+    // Removed before the POST, not after, so even a tab closed mid-request
+    // doesn't leave the secret behind.
+    storage.removeItem(LEGACY_FEED_KEY);
+  } catch {
+    // storage unavailable (private window, blocked site data)
+  }
+  if (!url) return;
+  try {
+    await connectCanvasFeed(url, fetchImpl);
+  } catch {
+    // a dead or expired link: dropped either way
+  }
 }
 
 // Completed items never show anywhere, regardless of Hide overdue (matches

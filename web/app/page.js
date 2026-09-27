@@ -8,7 +8,10 @@ import {
   connectPrairieLearnOk,
   displayLabel,
   fetchAnnouncements,
-  fetchCanvasFeed,
+  connectCanvasFeed as postCanvasFeed,
+  refreshCanvasFeed,
+  disconnectCanvasFeed as deleteCanvasFeed,
+  migrateLegacyFeedUrl,
   fetchCourses,
   fetchUpcoming,
   formatDue,
@@ -291,7 +294,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
 
           {!sampleMode && (
             <div className="py-3">
-              {canvasFeedUrl ? (
+              {feedConnected ? (
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4">
                   <div>
                     <div className="text-sm font-bold">Calendar feed connected</div>
@@ -320,7 +323,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
                     />
                     <AppButton
                       disabled={busy !== null || !feedUrlInput}
-                      onClick={() => run("canvas_feed", () => onConnectFeed(feedUrlInput))}
+                      onClick={() => run("canvas_feed", async () => { await onConnectFeed(feedUrlInput); setFeedUrlInput(""); })}
                       className="toggle-pill"
                     >
                       {busy === "canvas_feed" ? "Connecting…" : "Connect"}
@@ -494,7 +497,7 @@ export default function App() {
   const [importedCourses, setImportedCourses] = useState([]);
   const [loadError, setLoadError] = useState(null);
   const [hiddenCourses, setHiddenCourses] = useState([]);
-  const [canvasFeedUrl, setCanvasFeedUrl] = useState("");
+  const [feedConnected, setFeedConnected] = useState(false);
   const [feedItems, setFeedItems] = useState([]);
   const [feedError, setFeedError] = useState(null);
   const loadRequestId = useRef(0);
@@ -521,24 +524,25 @@ export default function App() {
       // ignore malformed/missing storage - keep the default (nothing hidden)
     }
     setPreferredKinds(readPreferredKindsCookie());
-    // The feed URL is a secret (works like a password) - localStorage only,
-    // never sent anywhere but /api/feed. Re-fetches automatically on every
-    // load so a saved connection keeps working without re-pasting the link.
-    const savedFeedUrl = localStorage.getItem("gather-canvas-feed-url");
-    if (savedFeedUrl) {
-      setCanvasFeedUrl(savedFeedUrl);
-      const requestId = ++feedRequestId.current;
-      fetchCanvasFeed(savedFeedUrl)
-        .then((nextFeedItems) => {
-          if (requestId !== feedRequestId.current) return; // superseded by a connect/disconnect since
-          setFeedItems(nextFeedItems);
-        })
-        .catch(() => {
-          if (requestId !== feedRequestId.current) return;
-          // Generic message only - a server error must never put the feed URL (a secret) on screen.
-          setFeedError("Couldn't refresh your feed - it may have expired or changed.");
-        });
-    }
+    // The feed URL is a secret (works like a password): it lives only in an
+    // httpOnly cookie the page can't read (see hub/ics.py's feed_request()).
+    // An older build kept it in localStorage - migrate that once, deleting
+    // it whatever happens, then refresh from the cookie on every load so a
+    // saved connection keeps working without re-pasting the link.
+    const requestId = ++feedRequestId.current;
+    migrateLegacyFeedUrl(window.localStorage)
+      .then(() => refreshCanvasFeed())
+      .then((nextFeedItems) => {
+        if (requestId !== feedRequestId.current) return; // superseded by a connect/disconnect since
+        setFeedConnected(nextFeedItems !== null);
+        setFeedItems(nextFeedItems ?? []);
+      })
+      .catch(() => {
+        if (requestId !== feedRequestId.current) return;
+        // Generic message only - a server error must never put the feed URL (a secret) on screen.
+        setFeedConnected(true);
+        setFeedError("Couldn't refresh your feed - it may have expired or changed.");
+      });
   }, []);
 
   function togglePreferredKind(kindId) {
@@ -573,24 +577,23 @@ export default function App() {
     const requestId = ++feedRequestId.current;
     let nextFeedItems;
     try {
-      nextFeedItems = await fetchCanvasFeed(url);
+      nextFeedItems = await postCanvasFeed(url);
     } catch {
       // Generic message only - a server error must never put the feed URL (a secret) on screen.
       throw new Error("Couldn't load that feed - double check the link and try again.");
     }
     if (requestId !== feedRequestId.current) return; // superseded by a disconnect/another connect since
-    setCanvasFeedUrl(url);
+    setFeedConnected(true); // the URL itself is now only in the httpOnly cookie
     setFeedItems(nextFeedItems);
     setFeedError(null);
-    localStorage.setItem("gather-canvas-feed-url", url);
   }
 
   function disconnectCanvasFeed() {
     feedRequestId.current++; // invalidate any in-flight fetch, so it can't overwrite this afterward
-    setCanvasFeedUrl("");
+    setFeedConnected(false);
     setFeedItems([]);
     setFeedError(null);
-    localStorage.removeItem("gather-canvas-feed-url");
+    deleteCanvasFeed(); // the server clears the cookie
   }
 
   async function load(useSample) {
@@ -750,7 +753,7 @@ export default function App() {
               allCourses={allCourses}
               hiddenCourses={hiddenCourses}
               onToggleCourseHidden={toggleCourseHidden}
-              canvasFeedUrl={canvasFeedUrl}
+              feedConnected={feedConnected}
               feedItemCount={feedItems.length}
               feedError={feedError}
               onConnectFeed={connectCanvasFeed}
