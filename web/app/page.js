@@ -19,9 +19,11 @@ import {
   isOverdue,
   mergeCourses,
   mergeItems,
+  monthGrid,
   selectActiveItems,
   selectConnections,
   selectCourseItems,
+  selectItemsDueOn,
   selectNextUp,
   selectVisibleCourses,
   selectVisibleItems,
@@ -80,6 +82,72 @@ const CUSTOM_COLOR_FIELDS = [
 
 const WEEKDAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
 const MAX_WORKDAY_FILE_BYTES = 5_000_000;
+const MONTH_WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// The Calendar nav tab's own page: a month grid of every active item's due
+// date, plus the clicked day's items below. Owns its own displayed-month and
+// selected-day state rather than lifting it into App(), since nothing else
+// in the app needs to know which day is selected here.
+function CalendarSection({ items, now }) {
+  const [monthDate, setMonthDate] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
+
+  const weeks = useMemo(() => monthGrid(monthDate), [monthDate]);
+
+  function shiftMonth(delta) {
+    setMonthDate((d) => new Date(d.getFullYear(), d.getMonth() + delta, 1));
+  }
+
+  function goToday() {
+    setMonthDate(new Date(now.getFullYear(), now.getMonth(), 1));
+  }
+
+  return (
+    <>
+      <div className="flex flex-col gap-4 border-b border-[var(--line)] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+        <div>
+          <div className="text-xl font-bold tracking-tight">
+            {monthDate.toLocaleDateString("en-CA", { month: "long", year: "numeric" })}
+          </div>
+          <div className="mt-1 text-sm text-[var(--muted)]">Deadlines across every connected course</div>
+        </div>
+        <div className="flex items-center gap-1">
+          <AppButton ariaLabel="Previous month" onClick={() => shiftMonth(-1)} className="icon-button">
+            <Icon name="arrow" className="size-4 rotate-180" />
+          </AppButton>
+          <AppButton onClick={goToday} className="filter-button">Today</AppButton>
+          <AppButton ariaLabel="Next month" onClick={() => shiftMonth(1)} className="icon-button">
+            <Icon name="arrow" className="size-4" />
+          </AppButton>
+        </div>
+      </div>
+
+      <div className="p-5 sm:p-6">
+        <div className="grid grid-cols-7 gap-1 text-center">
+          {MONTH_WEEKDAY_LABELS.map((label) => (
+            <div key={label} className="pb-2 text-[0.65rem] font-bold text-[var(--muted)]">{label}</div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-1">
+          {weeks.flat().map(({ date, inMonth }) => {
+            const dueCount = selectItemsDueOn(items, date).length;
+            const isToday = date.toDateString() === now.toDateString();
+            return (
+              <div
+                key={date.toISOString()}
+                className={`flex aspect-square flex-col items-center justify-center gap-1 rounded-lg text-sm font-semibold ${
+                  inMonth ? "text-[var(--ink)]" : "text-[var(--muted-light)]"
+                } ${isToday ? "bg-[var(--accent-soft)] text-[var(--accent)]" : ""}`}
+              >
+                <span>{date.getDate()}</span>
+                {dueCount > 0 && <span className="size-1.5 rounded-full bg-[var(--accent)]" />}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
+}
 
 function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed }) {
   const [term, setTerm] = useState("2026W1");
@@ -736,6 +804,8 @@ export default function App() {
                     )}
                   </div>
                 </>
+              ) : activeNav === "Calendar" ? (
+                <CalendarSection items={activeItems} now={now} />
               ) : (
               <>
               <div className="flex flex-col gap-4 border-b border-[var(--line)] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
