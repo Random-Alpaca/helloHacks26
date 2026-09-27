@@ -117,6 +117,24 @@ Researched 2026-09-26. **This is a research snapshot, not how we build.** The te
 |---|---|---|
 | Blackboard Learn REST | App key plus admin-added integration; 3-legged OAuth [docs](https://docs.blackboard.com/rest-apis/learn/getting-started/basic-authentication) | No |
 | D2L Brightspace | Admin registers the app, then OAuth2 auth code [docs](https://docs.valence.desire2learn.com/basic/oauth2.html) | No |
+
+### D2L Brightspace, detail (requested outside the normal issue-tracked roadmap, 2026-09-26)
+
+**Not a tracked target for UBC.** UBC runs Canvas, not Brightspace - there is no UBC Brightspace instance, no account, and no issue for this (compare: WeBWorK #23, Macmillan Achieve #24, Moodle #25 - Brightspace is on none of them). This section, and the `hub/brightspace.py` adapter it backs, exist because a human asked for a first draft directly, not because the roadmap called for one. **Nothing below has been checked against a live Brightspace page** - everything is from D2L's own public documentation or public screenshots, and is marked `[unverified]` per this file's convention. Treat this the way `hub/prairielearn.py` treated PrairieLearn before someone confirmed its markup - except nobody can confirm this one, because no account exists to check it against.
+
+- **No student self-serve API**, same blocker as Workday: the only programmatic access is the **Valence API** (`docs.valence.desire2learn.com`), which needs an admin-issued OAuth2 developer key. A browser-session scrape - the same "student logs in themselves, we reuse the session" pattern `hub/site.py` already provides for Canvas and PrairieLearn - is the only thing a student could self-serve, **if** Brightspace's login is even reachable that way. Unverified: depends entirely on how a given institution fronts Brightspace SSO, and no institution's flow has been tried here.
+- **Multi-tenant.** Every institution runs its own Brightspace subdomain or custom domain (there is no single shared host the way `canvas.ubc.ca` is for Canvas), so any adapter has to take the instance base URL as a parameter, not a constant.
+- **Documented (checked against the cited source):**
+  - Course URLs use an "Org Unit Number": `/d2l/home/<orgUnitId>` is a course's homepage, `/d2l/le/content/<orgUnitId>/Home` is its Content tool. [Course homepage](https://community.d2l.com/brightspace/kb/articles/18099-course-homepage)
+  - The course homepage's Calendar widget shows up to 14 upcoming events/due dates, with a "Go to Calendar" link to the full Calendar tool. [About Calendar](https://community.d2l.com/brightspace/kb/articles/16511-about-calendar)
+  - The full Calendar tool has Day/Week/Month views plus an **Agenda** view that groups events by Date, Course or Category. [Calendar](https://community.d2l.com/brightspace/kb/articles/18156-calendar)
+  - Modern Brightspace UI ("Daylight") is assembled from D2L's own open-source `@brightspace-ui/core` Lit web components (`d2l-list`, `d2l-list-item`, etc.), which is public and MIT-licensed. [BrightspaceUI/core](https://github.com/BrightspaceUI/core)
+- **[unverified] - guessed, not documented:**
+  - The exact HTML/DOM the Agenda view and "My Courses" list render (class names, data attributes) - built to be *plausible* given the `@brightspace-ui/core` component names above, not confirmed against a real page.
+  - The course tile's title text format (assumed "`<code> <section> (<term>): <title>`", mirroring the shape `hub/prairielearn.py` already parses for a different LMS).
+  - The Agenda view's due-date text format (assumed "`Sep 27, 2026 11:59 PM`", based on publicly available Brightspace screenshots, not a spec).
+  - The timezone the Calendar displays dates in - assumed to default to the student's profile timezone with no zone abbreviation in the text, unlike PrairieLearn's popover. `hub/brightspace.py` defaults to Pacific time and says so loudly (`# ponytail:` comment) rather than guessing silently.
+- **What this means for review:** `hub/brightspace.py` is a good-faith first draft, not a mergeable/demo-ready adapter. It needs real-endpoint screenshots from an actual Brightspace tenant before anyone should trust its selectors (issue #15's rule 9 standard) - and since none exists on this project, that verification has to come from whoever requested this, or wait until a school in Hub's user base actually runs Brightspace.
 | Google Classroom | OAuth2 with `classroom.courses.readonly` and `classroom.coursework.me.readonly` [docs](https://developers.google.com/workspace/classroom/guides/auth) | Yes |
 | MS Graph Education | Delegated `EduAssignments.ReadBasic` | Likely needs admin consent **[unverified]** |
 | Ed Discussion | Personal API token; undocumented API ([edapi](https://pypi.org/project/edapi/)) | Yes |
