@@ -35,8 +35,8 @@ async function saveCapture(provider, capture) {
   await chrome.storage.local.set({latestModels});
   const {syncKey} = await chrome.storage.local.get("syncKey");
   if (!syncKey) {
-    // ponytail: browser-local rows until Terrace provisions authenticated durable storage.
-    await setStatus(`${provider.label} normalized by Vercel and saved locally. Hosted storage is not configured yet.`);
+    // The popup generates a key by default; this only fires if it was cleared.
+    await setStatus(`${provider.label} normalized by Vercel and saved locally. No sync key saved - open the popup to generate one.`);
     return;
   }
   const response = await fetch(`${base}/api/sync`, {

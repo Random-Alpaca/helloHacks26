@@ -11,9 +11,22 @@ for (const provider of globalThis.HUB_PROVIDERS) {
   providerSelect.append(option);
 }
 
+function generateKey() {
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 async function refresh() {
   const saved = await chrome.storage.local.get(["syncKey", "syncStatus", "providerOrigins", "hubBase"]);
-  key.value = saved.syncKey || "";
+  if (!saved.syncKey) {
+    // ponytail: a key is just a random client secret (hub/hosted.py) - generate
+    // one by default so hosted sync works out of the box, same as visiting a
+    // site for the first time. Shown in the field so the student can copy it
+    // to use the same hub on another browser.
+    saved.syncKey = generateKey();
+    await chrome.storage.local.set({syncKey: saved.syncKey});
+  }
+  key.value = saved.syncKey;
   hubBaseInput.value = saved.hubBase || "";
   hubBaseInput.placeholder = DEFAULT_HUB_BASE;
   originInput.value = saved.providerOrigins?.[providerSelect.value] || "";
