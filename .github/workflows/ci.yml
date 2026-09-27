@@ -3,6 +3,7 @@ name: Tests
 on:
   push:
   pull_request:
+  workflow_dispatch:                   # ship-on-request: gh workflow run Tests --ref main
 
 jobs:
   pytest:
@@ -21,7 +22,9 @@ jobs:
 
   deploy:
     needs: pytest                      # only after tests pass
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    # ponytail: ship-on-request only (Terrace, 2026-09-27), because pushes burned the Vercel
+    # Hobby daily deploy cap. Upgrade: put `push` back here if we move to Pro.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
