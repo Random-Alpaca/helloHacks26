@@ -1,36 +1,47 @@
 """WeBWorK adapter: browser-session login (hub.site), then scrape a course's
 problem-set list page for tasks/deadlines.
 
-**[unverified]** Unlike hub/prairielearn.py, nobody on the team has pulled up
-a real, live WeBWorK course to confirm this page's markup. WeBWorK is open
-source and its problem-set-list template (`ProblemSets.pm`) is public, so the
-table shape below (a set name link, an open date, a due date, and sometimes a
-reduced-scoring date and a grade) matches the documented/screenshotted
-structure closely-watched WeBWorK deployments show - it is NOT scraped from a
-live instance. Treat every selector here as a best guess until a human with a
-real WeBWorK account (UBC or otherwise) checks it against a live course and
-updates this docstring.
+**Verified against a real UBC course** (MATH_V 100A ALL SECTIONS 2026W1,
+reached via UBC's self-hosted webwork.elearning.ubc.ca, 2026-09-26) -- the
+markup below is the actual page, not a guess. Two things about that real
+course carry over as genuine constraints, not just guesses:
+
+- **No standalone login here.** This deployment has no separate
+  username/password form; the WeBWorK session is established by launching
+  the course's "WeBWorK" link from Brightspace (LTI SSO), which lands you
+  on `base` already logged in. Once that session cookie exists, plain GETs
+  to `base` work fine on their own (no LTI relaunch needed per page) --
+  confirmed by navigating there directly in a fresh tab and seeing "Logged
+  in as ..." with the full assignment list, no login prompt. `hub.site`'s
+  own `login()` (open `base`, wait for the student to sign in, save the
+  session) is therefore UNVERIFIED for WeBWorK specifically: we don't know
+  what a cookie-less hit to `base` looks like for a school that only offers
+  WeBWorK via LTI. Schools where WeBWorK *does* front its own login page
+  should work fine with `hub.site.login` same as Canvas/PrairieLearn.
+- **The due date disappears once a set closes.** WeBWorK's default
+  Assignments listing shows a due date only for currently-open sets
+  ("Open. Due <date>."). A set that hasn't opened yet shows only its open
+  date ("Will open on <date>.") -- no due date at all. A set that's past
+  due shows only "Answers available for review[ on <date>]." -- that date
+  is when *answers* unlock, not the original due date, and is NOT the same
+  thing. This adapter does not fabricate a due date for either case; both
+  come back with `due=None`, honestly reflecting what the page shows.
+- **No score/completion signal exists on this page at all.** There's no
+  score or percentage anywhere in the Assignments listing (a separate
+  Grades page exists, linked in the nav, but wasn't explored -- a
+  cross-reference against it would be a real future improvement, not
+  something to guess at here). Every Item's `done` is `None` (unknown).
 
 Why this exists (see issue #23): at UBC, WeBWorK sets are usually embedded in
 Canvas as an "External Tool" assignment, so hub/canvas.py likely already
-lists them. But grades sync to Canvas roughly daily and **due dates don't
-sync at all** - the instructor types the Canvas due date in by hand, so it
-can drift from the real WeBWorK due date. This adapter exists for two cases:
-1. Correcting that drift: fetch WeBWorK's own due date and compare/override
-   the Canvas one for the same set.
-2. Schools/courses that run WeBWorK standalone, with no LMS in front of it
-   at all (this project's stated "other schools too" mission, per AGENTS.md).
+lists them -- but grades sync to Canvas roughly daily and due dates don't
+sync at all (the instructor types the Canvas date in by hand, so it can
+drift). This adapter exists for two cases: (1) correcting that drift by
+reading WeBWorK's own due date for currently-open sets, and (2) schools that
+run WeBWorK standalone with no LMS in front of it at all (this project's
+"other schools too" mission, per AGENTS.md).
 
-Login caveat: hub.site.login() waits for the browser to land back on `base`
-with "/login" no longer in the URL - true for Canvas and PrairieLearn because
-UBC fronts both with the same CWL redirect. WeBWorK's *own* built-in login
-(used by schools that don't front it with an SSO) instead renders a login
-form directly on `base` and never navigates away on failure, and stays on
-`base` on success too - so the redirect-based wait should still resolve, but
-this is unverified against a real standalone WeBWorK login page. If a school
-fronts WeBWorK with its own SSO (UBC: CWL), that should behave like Canvas.
-
-Try it:  uv run python -m hub.webwork <course-url>
+Try it:  uv run python -m hub.webwork <course-url> <course-code>
 """
 import re
 from datetime import datetime, timedelta, timezone
@@ -43,10 +54,10 @@ from hub.models import Course, Item, category_for
 
 SITE = "webwork"
 
-# Common North American zone abbreviations WeBWorK's date strings show.
-# Fixed offsets, not zoneinfo/pytz - same shortcut hub/prairielearn.py takes,
-# for the same reason: good enough until a course in a different zone shows
-# up, and cheap to extend then.
+# Common North American zone abbreviations WeBWorK's date strings show (a
+# real one, "PDT", is confirmed; the rest are the same educated extension
+# hub/prairielearn.py makes, kept only until a course in a different zone
+# shows up).
 TZ_OFFSET = {
     "PST": -8, "PDT": -7,
     "MST": -7, "MDT": -6,
@@ -54,17 +65,24 @@ TZ_OFFSET = {
     "EST": -5, "EDT": -4,
 }
 
-# WeBWorK's date strings look like "09/14/2026 at 11:59pm PDT" (documented
-# format; [unverified] against a live page - see module docstring).
+# The real, verified format: "October 1, 2026, 11:59:00 PM PDT." (full month
+# name, comma-separated, seconds included, then a zone abbreviation).
 DATE_RE = re.compile(
-    r"(\d{1,2})/(\d{1,2})/(\d{4})\s+at\s+(\d{1,2}):(\d{2})\s*(am|pm)\s*([A-Z]{2,4})?",
-    re.IGNORECASE,
+    r"(?P<month>[A-Z][a-z]+)\s+(?P<day>\d{1,2}),\s+(?P<year>\d{4}),\s+"
+    r"(?P<hour>\d{1,2}):(?P<minute>\d{2}):(?P<second>\d{2})\s*(?P<ampm>AM|PM)\s+(?P<tz>[A-Z]{2,4})",
 )
+
+_MONTHS = {
+    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
+}
 
 
 def login(base):
     """Open a visible browser at the course's WeBWorK URL; the student signs
-    in; we save the session. See the module docstring's login caveat."""
+    in if there's a login form to sign in to. See the module docstring's
+    login caveat -- for an LTI-only deployment, this needs the student to
+    have already reached `base` once via their LMS."""
     site.login(SITE, base)
 
 
@@ -78,88 +96,84 @@ def _get_soup(req, url):
 
 
 def due_from_text(text):
-    """Parse a WeBWorK date string ("09/14/2026 at 11:59pm PDT") into a
-    tz-aware datetime. None if the text has no such date (e.g. "n/a",
-    a blank cell, or a set that isn't open yet)."""
+    """Parse a real WeBWorK date string ("October 1, 2026, 11:59:00 PM PDT")
+    into a tz-aware datetime, or None if there's no such date in `text`."""
     if not text:
         return None
     m = DATE_RE.search(text)
     if not m:
         return None
-    month, day, year, hour, minute, ampm, tz = m.groups()
-    hour = int(hour) % 12
-    if ampm.lower() == "pm":
+    month = _MONTHS.get(m.group("month").lower())
+    if month is None:
+        return None
+    hour = int(m.group("hour")) % 12
+    if m.group("ampm").upper() == "PM":
         hour += 12
-    dt = datetime(int(year), int(month), int(day), hour, int(minute))
-    return dt.replace(tzinfo=timezone(timedelta(hours=TZ_OFFSET.get((tz or "").upper(), 0))))
+    dt = datetime(int(m.group("year")), month, int(m.group("day")), hour, int(m.group("minute")), int(m.group("second")))
+    offset = TZ_OFFSET.get(m.group("tz").upper(), 0)
+    return dt.replace(tzinfo=timezone(timedelta(hours=offset)))
 
 
-def _is_complete(score_text):
-    """WeBWorK shows a set's score as a percentage once it's graded. Treat an
-    exact "100%" as done and anything else (partial score, "N/A", blank) as
-    unknown rather than guessing "not done" - a low score might still be a
-    student who is still working on it.
-    # ponytail: crude heuristic, not a real completion signal (WeBWorK has no
-    # simple "submitted" flag on this page as far as we've seen documented).
-    # Upgrade if a live page shows a clearer per-set status."""
-    if score_text and score_text.strip() == "100%":
-        return True
-    return None
+def to_item(li, course_code, base=""):
+    """One real <li data-set-status="open|not-open|past-due"> -> an Item.
 
-
-def to_item(row, course_code, base=""):
-    """One <tr> of the problem-sets table -> an Item. Expects a link cell
-    (set name + url) and a due-date cell; a score cell is optional. `base`
+    Verified structure: a title (an <a class="fw-bold ..."> when the set has
+    a link -- open or past-due -- or a plain <span class="set-id-tooltip">
+    when it doesn't -- not yet open), followed by a `<div class="font-sm">`
+    holding the status/date text described in the module docstring. `base`
     resolves a relative href into an absolute URL; pass "" in tests where
-    the exact host doesn't matter."""
-    cells = row.select("td")
-    date_cells = [c for c in cells if due_from_text(c.get_text(" ", strip=True))]
-    # The set list shows an open date *and* a due date (and sometimes a
-    # reduced-scoring date) side by side - all match the same date pattern.
-    # We want the due date specifically. Per the documented column order
-    # (open, [reduced-scoring,] due), that's the last date-shaped cell before
-    # any trailing score column - so take the last match, not the first.
-    due_cell = date_cells[-1] if date_cells else None
-    link = row.find("a")
-    score_cell = next((c for c in cells if c.get_text(strip=True).endswith("%")), None)
-    if link:
+    the exact host doesn't matter.
+    """
+    status = li.get("data-set-status", "")
+    link = li.select_one("a.fw-bold, div.ms-3 a")
+    if link is not None:
         title = link.get_text(strip=True)
-    elif cells:
-        title = cells[0].get_text(strip=True)
-    else:  # a header row (<th> only, no <td>) - degrade rather than crash
-        title = row.get_text(strip=True)
+        url = urljoin(base, link["href"]) if link.get("href") else ""
+    else:
+        name_el = li.select_one("span.set-id-tooltip")
+        title = name_el.get_text(strip=True) if name_el else li.get_text(strip=True)
+        url = ""
+
+    status_el = li.select_one("div.font-sm")
+    status_text = status_el.get_text(" ", strip=True) if status_el else ""
+    # Only an *open* set's status line contains its real due date -- see the
+    # module docstring. A not-open or past-due set's date (if any) is a
+    # different date entirely, not the due date, so it's deliberately not
+    # parsed as one here.
+    due = due_from_text(status_text) if status == "open" else None
+
+    kind = "quiz" if li.get("data-set-type") == "test" else "problemset"
+
     return Item(
         course=course_code,
-        category=category_for("problemset"),
-        kind="problemset",
+        category=category_for(kind),
+        kind=kind,
         title=title,
-        due=due_from_text(due_cell.get_text(" ", strip=True)) if due_cell else None,
-        url=urljoin(base, link["href"]) if link and link.get("href") else "",
+        due=due,
+        url=url,
         source=SITE,
-        done=_is_complete(score_cell.get_text(strip=True)) if score_cell else None,
+        done=None,  # no score/completion signal exists on this page -- see module docstring
     )
 
 
 def _problem_sets(req, base, course_code):
     soup = _get_soup(req, base)
     items = []
-    # WeBWorK's set list is documented as a single <table> of one row per
-    # set; skip header rows (no link in the row) rather than assuming a
-    # fixed row count, same defensive spirit as prairielearn's group-heading
-    # skip.
-    for row in soup.select("table tr"):
-        if row.find("a"):
-            items.append(to_item(row, course_code, base))
+    # The real markup is <li data-set-status="..."> inside
+    # #set-list-container, not a <table> -- skip anything without that
+    # attribute rather than assuming every <li> on the page is a set.
+    for li in soup.select("li[data-set-status]"):
+        items.append(to_item(li, course_code, base))
     return items
 
 
 def fetch(base, course_code):
     """Return items for the WeBWorK course at `base` (e.g.
-    "https://webwork.example.edu/webwork2/math101/"). `course_code` is
-    supplied by the caller (there's no student-facing course-catalogue join
-    key on this page as far as we've seen documented) so items can be
-    matched against the same course from Canvas/Workday. Opens a browser
-    window to log in if there's no saved session."""
+    "https://webwork.example.edu/webwork2/math101"). `course_code` is
+    supplied by the caller -- there's no student-facing course-catalogue
+    join key on this page -- so items can be matched against the same
+    course from Canvas/Workday. Opens a browser window to log in if there's
+    no saved session (see the module docstring's login caveat)."""
     return site.fetch_with_session(SITE, base, lambda req: _problem_sets(req, base, course_code))
 
 
