@@ -437,12 +437,12 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
         {!isLocalMode() && (
           <div className="mb-5 rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4">
             {hostedConnected ? (
-              <div className="text-sm font-bold text-[var(--success)]">Hub connected - showing your synced data.</div>
+              <div className="text-sm font-bold text-[var(--success)]">Lauds connected - showing your synced data.</div>
             ) : (
               <>
-                <div className="mb-2 text-sm font-bold">Paste your hub sync key</div>
+                <div className="mb-2 text-sm font-bold">Paste your Lauds sync key</div>
                 <div className="mb-3 text-xs text-[var(--muted)]">
-                  Open the UBC Hub browser extension&apos;s popup and copy its &quot;Hub sync key&quot; field.
+                  Open the Lauds browser extension&apos;s popup and copy its &quot;Lauds sync key&quot; field.
                 </div>
                 <div className="flex items-center gap-2">
                   <input
@@ -450,7 +450,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
                     value={hostedKeyInput}
                     onChange={(e) => setHostedKeyInput(e.target.value)}
                     placeholder="Sync key from the extension"
-                    aria-label="Hub sync key"
+                    aria-label="Lauds sync key"
                     className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 py-1 text-xs"
                   />
                   <AppButton
@@ -1004,7 +1004,7 @@ export default function App() {
           <div className="flex-1 overflow-y-auto">
             <div className="flex items-center gap-3 px-6 py-7">
               <div className="logo-mark"><span /><span /><span /></div>
-              <div className="text-xl font-bold tracking-tight">UBC Hub</div>
+              <div className="text-xl font-bold tracking-tight">Lauds</div>
             </div>
 
             <nav className="mt-4 flex flex-col gap-1 px-3">
