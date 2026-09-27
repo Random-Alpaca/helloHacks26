@@ -1,5 +1,7 @@
 # UBC Hub: design spec
 
+> **Code wins.** Where this doc and `main` disagree, the code on `main` and AGENTS.md (*Jacky's standard*) are right, and this doc is stale. Fix it here when you notice.
+
 > **Palantir Gotham for students.** A provider-agnostic fusion layer: any number of information providers go into one shared model, and come out as one pane of glass. Canvas, Workday and the UBC Bookstore are the first three providers at UBC, not the product. Must extend to other ed-tech and other schools without touching the core. The binding version is the Mission section of [AGENTS.md](../AGENTS.md).
 
 Answers Jacky's design prompt ([handoff/jacky-design-prompt.md](handoff/jacky-design-prompt.md)). The API facts behind every decision are in [api-standards.md](api-standards.md), with sources. This is the founding doc for the build. Where it says **Decision**, change it here first, then in code.
@@ -22,7 +24,8 @@ What realistic integration looks like with what UBC gives students today:
 | Bookstore | Anonymous GETs on the textbook lookup plus Shopify `products.json` | Public, no login |
 | **Syllabus** | The student uploads the syllabus (PDF, DOCX or pasted text). An LLM extracts every dated item (exams, due dates, readings, *where* and *how* to submit) into Items, each with an excerpt from the syllabus as a citation | **Real pain point:** one prof never put due dates on Canvas, and the PrairieLearn deadlines were only at the bottom of the syllabus. Canvas isn't the source of truth, and the syllabus often is |
 | UBC key dates | Public UBC academic calendar pages: add/drop, withdrawal, exam period, tuition due **[unverified URLs]** | Public, no login; the same for every student |
-| Gradescope, iClicker, WeBWorK, PrairieLearn | **Through Canvas** when the instructor wires it up (LTI). Otherwise **through the syllabus** provider | No student-accessible API |
+| PrairieLearn | **Built** (`hub/prairielearn.py`): the student's own browser session, then the course's assessments page | No student-facing API; same login pattern as Canvas via `hub/site.py` |
+| Gradescope, iClicker, WeBWorK | **Through Canvas** when the instructor wires it up (LTI). Otherwise **through the syllabus** provider | No student-accessible API |
 | Piazza, Ed, others | Later, per-source adapters (Ed has personal tokens; Piazza has none) | Instructor-dependent |
 | UBCGrades, UBCExplorer, RateMyProfessors | Later: course-selection season only | Not part of "this week" |
 | Lecture recordings and transcripts (Panopto, Kaltura) | Later, and only via official download buttons the student can already use | Behind CWL; see the scraping policy below |
@@ -92,7 +95,9 @@ These come from Terrace's own coursework tooling. We borrow the patterns; none o
 
 ## 3. System architecture
 
-**Decision: Python + Streamlit, one repo, one process.**
+**Superseded 2026-09-26 (Terrace): the UI is Next.js in `web/`, deployed on Vercel. The backend stays Python.** The original reasoning below explains why Streamlit was the first pick. `app.py` survives as the frozen live-demo harness.
+
+~~**Decision: Python + Streamlit, one repo, one process.**~~
 
 Why:
 - **One language** for a team with two first-years.
@@ -106,15 +111,18 @@ Why:
  Browser ◄────► │  UI pages: Setup · This week · Courses · Textbooks                        │
                 │        │                                                                  │
                 │        ▼                                                                  │
-                │  hub/logic.py   normalise · match course codes · dedupe · sort · clashes  │
+                │  hub/logic.py   normalise · match course codes · dedupe · sort (planned, #2)│
                 │        ▲                                                                  │
-                │  hub/models.py  Course · Item · Textbook  (the shared model, §4)          │
+                │  hub/db.py      SQLite ~/.ubc-hub/hub.db · save() · upcoming() · by_course│
                 │        ▲                                                                  │
-                │  adapters:                                                                │
+                │  hub/models.py  Course · Item · Textbook  (Jacky's; the contract)         │
+                │        ▲                                                                  │
+                │  adapters (built):                                                        │
                 │   hub/canvas.py ──── HTTPS ───► canvas.ubc.ca /api/v1  (user's own session)│
+                │   hub/prairielearn.py ─ HTTPS ─► PrairieLearn (user's own session)        │
                 │   hub/ics.py    ──── HTTPS ───► Canvas/Moodle .ics feed URL               │
-                │   hub/workday.py ◄── file upload (.xlsx)                                  │
-                │   hub/bookstore.py ─ HTTPS ───► the.bookstore.ubc.ca, bookstore.ubc.ca     │
+                │  adapters (planned): workday.py (.xlsx upload), bookstore.py (#20),       │
+                │   syllabus.py (#17), ubc_dates.py (#19)                                   │
                 │        │                                                                  │
                 │  cache: st.cache_data (in-memory, TTL)                                    │
                 └───────────────────────────────────────────────────────────────────────────┘

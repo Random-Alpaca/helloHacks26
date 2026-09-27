@@ -23,7 +23,14 @@ UBC Hub is a read-only dashboard that answers "what do I need to do this week?" 
 - **[docs/api-standards.md](docs/api-standards.md)** has every endpoint, auth rule and source. Check it before guessing at an API.
 - **GitHub issues** are the task list. Each person works from the issues assigned to them.
 
-Stack: **Python 3.12 + Streamlit**, managed with **uv**.
+Stack: **backend in Python 3.12** (managed with **uv**), **UI in Next.js (`web/`)**, deployed on **Vercel** by GitHub Actions.
+
+**The UI is `web/` (Terrace's decision, enforced).** Sam's Next.js app in `web/` is *the* product UI and the public site (https://hello-hacks26-terraceonhigh.vercel.app).
+- **All new UI work goes in `web/`.**
+- **Theme: Comprador, provisional (FLUID).** It uses the same palette and self-hosted fonts as `.streamlit/config.toml` and terrace.zone, as CSS variables in one place. Expect revision when Terrace's design lands (#14). Change tokens, not components, and don't hard-code colors.
+- **`web/` is not prod until it has feature parity with `app.py` (#31).** Terrace's agent checks parity item by item on the same data before `app.py` is retired. A claim isn't enough.
+- `app.py` (Streamlit) is **frozen**. It's the local live-demo harness for real Canvas + PrairieLearn logins until `web/` can read real data. Only fixes keep that demo working; no new features.
+- Don't start other UI directions (e.g. `jacky-ui-experiment`). A backend JSON API that feeds `web/` is fine, and that's Jacky's call.
 
 ## Who you might be working with
 
@@ -89,7 +96,7 @@ git commit -m "Short description of what you did"
 git push
 ```
 
-When an issue is done, open a PR from your branch into `main` (`gh pr create`) and ask Jacky or Terrace to review. Mention the issue with `Closes #N` in the PR description.
+When an issue is done, open a PR from your branch into `main` (`gh pr create`) and ask Jacky or Terrace to review. **Attach real-endpoint screenshots first** (Jacky's standard, rule 9), or the PR won't merge. Mention the issue with `Closes #N` in the PR description.
 
 ## Rules that protect the repo
 
@@ -111,6 +118,7 @@ Several agents work in this repo at once, each run by a different person on a di
 1. **Start of session.** Run `gh issue list --assignee @me` and read the **Agent board** issue (pinned) for what other agents are doing. Your human's chat is still the authority on what to work on.
    - **Stay near-live while your human is working.** Re-check the board and your issues about every 10 minutes: in Claude Code, `/loop 10m check the Agent board (#15) and my assigned issues for anything new since last check; act only on what my human has authorized, and tell me about the rest`. Other agents use their own scheduler, or check between tasks. Stop the loop when your human leaves.
    - Quick read: `gh issue view 15 --comments | tail -40`.
+   - **Live alerts (preferred):** run `python3 -u tools/watch_board.py --me "[agent: <tool> for <human>]"` as a background watch. In Claude Code that's the **Monitor** tool with a 30-minute timeout; re-arm it when it expires. It prints one line per new comment, push, or PR/issue change, skips your own comments and bots, and uses your own `gh` login. **Session `/loop`/cron doesn't fire while your session is busy, so don't rely on it.**
 2. **Claim before you start.** On the issue, check for an existing `status:claimed` label or a recent claim comment. Then add the label and comment `[agent: <tool> for <human>] claiming, branch <branch>, plan: <one line>`.
 3. **Sign every comment** you post with `[agent: <tool> for <human>]` so people can tell agent text from human text.
 4. **Status labels:** `status:claimed` → `status:review` (PR open) → closed. Use `status:blocked` plus a comment saying on what.
@@ -123,10 +131,11 @@ Several agents work in this repo at once, each run by a different person on a di
 ## Code layout and conventions
 
 ```
-app.py              Streamlit entry point (UI only, no fetching or parsing logic here)
+web/                THE UI: Next.js, deployed to Vercel via Actions (hosted = Sample data only for now)
+app.py              FROZEN Streamlit live-demo harness (real Canvas/PL on a laptop); fixes only
 hub/models.py       Course, Item, Textbook dataclasses: THE shared model (Jacky's; design.md §4 is only a proposal)
 hub/db.py           SQLite storage (~/.ubc-hub/hub.db): save() upserts, upcoming(), courses(), by_course()
-hub/logic.py        normalise, match course codes, dedupe, sort, flags (pure functions, on Jacky's model)
+hub/logic.py        (planned, #2) normalise, match course codes, dedupe, sort, flags: pure functions on Jacky's model
 hub/site.py         shared core for "student logs in themselves" sites: login, saved session, pagination, 429 backoff
 hub/canvas.py       Canvas adapter (browser session → /api/v1 JSON)
 hub/ics.py          any .ics calendar feed (Canvas, Moodle, ...)
@@ -147,7 +156,15 @@ Every branch must meet this before its PR merges. Reviewers check it first.
 5. **Adapters persist via `db.save(conn, courses, items, textbooks)`**, and the UI reads via `db.upcoming()`, `db.by_course()` and `db.courses()`. Nothing else touches SQL.
 6. **Logged-in sites reuse `hub/site.py`** (login, session, pagination, 429 backoff). Don't write a second login flow.
 7. **Mark deliberate shortcuts** with a `# ponytail:` comment that names the limit and the upgrade path, as in `hub/db.py` and `hub/canvas.py`.
-8. **Tests are network-free** and `uv run pytest` is green before you push. Live verification against a real account is welcome, but it goes in the PR description, not in tests.
+8. **Tests are network-free** and `uv run pytest` is green before you push.
+9. **Merge gate: proven against a real endpoint** (Terrace's rule, enforced by Terrace's agent at review). No PR that touches data merges until **its author** posts **screenshots** in the PR showing it working against a real endpoint. That covers adapters, `hub/db.py`, `hub/logic.py`, the UI, and anything else that reads or shapes student data.
+   - **Real endpoint** means a live provider:
+     - UBC Canvas, PrairieLearn or the Bookstore with your own login, or
+     - the team's **self-hosted Canvas** (real Canvas LMS on Terrace's server; access via Terrace).
+     Saved fixtures and sample data do **not** count.
+   - **Code that doesn't call a provider itself** (`logic.py`, UI tabs): screenshot it running on data that came from a real endpoint, e.g. a `hub.db` filled by `canvas.fetch()`.
+   - **The screenshots show** the command or screen plus its output. Redact names, grades and anything else personal, and never show tokens, cookies or passwords.
+   - **Exempt:** docs, `AGENTS.md`, config, and test-only changes.
 
 - **The backend layout is Jacky's call.** The block above mirrors `main`; if they differ, the code wins. Ask Jacky or their agent (Agent board #15) before adding backend modules or changing `hub/models.py` or `hub/site.py`.
 - **Everything speaks the shared model.** Each adapter has one public `fetch(...)` returning `Course`, `Item` and/or `Textbook` objects, each with its `source` set. The UI and logic never see raw API JSON or HTML, and never branch on a provider name.
