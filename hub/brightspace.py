@@ -10,7 +10,11 @@ also run through Brightspace, which was enough to check real endpoints:
   the logged-in student, using the ordinary browser session (no separate
   developer key needed).
 - `GET /d2l/api/lp/1.50/enrollments/myenrollments/?orgUnitTypeId=3&isActive=true&canAccess=true`
-  returns the student's own active course enrollments as JSON, same way.
+  returns the student's own active course enrollments as JSON, same way, with
+  a `PagingInfo` cursor (`Bookmark`/`HasMoreItems`) this adapter follows to
+  get every enrollment -- the one real account checked has a single active
+  course (`HasMoreItems: false`), so the loop itself is untested, but the
+  field names are D2L's own documented paging convention, not a guess.
 
 This updates docs/api-standards.md's previous note that Brightspace has no
 student self-serve access at all -- that's true of the official developer-key
@@ -31,22 +35,42 @@ here, is a call for Jacky/the team, not this file alone.
 Brightspace is multi-tenant -- every institution runs its own subdomain or
 custom domain, unlike Canvas's single `canvas.ubc.ca` -- so `base` is always
 an explicit argument here, never a module-level constant like PrairieLearn's
-`BASE`.
+`BASE`. `base` can be either the bare origin (e.g. "https://ubc.brightspace.com",
+matching hub/prairielearn.py's bare-origin convention) or a full course URL
+(e.g. "https://ubc.brightspace.com/d2l/home/7067", the more natural thing to
+paste when signing in on your own course page -- this is literally how the
+live testing above was first done): `fetch()` normalises either to just the
+origin before building any API path, so it doesn't matter which is passed.
 
 Try it:  uv run python -m hub.brightspace <base-url>
 """
+from urllib.parse import urlsplit
+
 from hub import site
 from hub.models import Course
 
 SITE = "brightspace"
 
 
+def _origin(base):
+    """Normalise `base` to just scheme://host, whether it's a bare origin or
+    a full course URL -- see the module docstring. Every `/d2l/api/...` path
+    below is absolute from the origin, so concatenating a full course URL's
+    path in front of it would build a broken, doubled-up URL (confirmed:
+    this is exactly what "https://host/d2l/home/<id>" + "/d2l/api/..."
+    produces if `base` isn't normalised first)."""
+    parts = urlsplit(base)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
 def login(base):
-    """Open a visible browser at `base`; the student signs in through
-    whatever SSO that institution fronts Brightspace with; save the session.
-    Verified for UBC's CWL-fronted flow (this is exactly how the real
-    session used to test this module's calls was established)."""
-    site.login(SITE, base)
+    """Open a visible browser at `base`'s origin; the student signs in
+    through whatever SSO that institution fronts Brightspace with; save the
+    session. Verified for UBC's CWL-fronted flow (this is exactly how the
+    real session used to test this module's calls was established, by
+    signing in on a specific course's own page -- see the module docstring
+    for why a full course URL works fine here too)."""
+    site.login(SITE, _origin(base))
 
 
 def _get_json(req, base, path):
@@ -68,12 +92,32 @@ def to_course(enrollment):
     return Course(code=org_unit["Code"], section="", term="", title=org_unit["Name"])
 
 
+def _enrollments(req, base):
+    """All of the student's active enrollments, following D2L's own bookmark
+    pagination. The one real account this was checked against has a single
+    course (`PagingInfo.HasMoreItems` was `false`), so the loop itself is
+    unexercised -- but `PagingInfo.Bookmark`/`HasMoreItems` are D2L's
+    standard, documented paging fields, and silently reading only the first
+    page for a student with many enrollments would be a real, if untested,
+    way to lose courses."""
+    path = "/d2l/api/lp/1.50/enrollments/myenrollments/?orgUnitTypeId=3&isActive=true&canAccess=true"
+    items = []
+    while path:
+        page = _get_json(req, base, path)
+        items += page.get("Items", [])
+        paging = page.get("PagingInfo", {})
+        if not paging.get("HasMoreItems") or not paging.get("Bookmark"):
+            break
+        path = (
+            "/d2l/api/lp/1.50/enrollments/myenrollments/"
+            f"?orgUnitTypeId=3&isActive=true&canAccess=true&bookmark={paging['Bookmark']}"
+        )
+    return items
+
+
 def _run(req, base):
     _get_json(req, base, "/d2l/api/lp/unstable/users/whoami")  # verified reachable; confirms the session is live
-    enrollments = _get_json(
-        req, base, "/d2l/api/lp/1.50/enrollments/myenrollments/?orgUnitTypeId=3&isActive=true&canAccess=true"
-    )
-    courses = [to_course(e) for e in enrollments.get("Items", [])]
+    courses = [to_course(e) for e in _enrollments(req, base)]
     return courses, []  # see module docstring: no plain JSON endpoint found for due dates yet
 
 
@@ -83,9 +127,13 @@ def fetch(base):
     "Items" section for why, and what would need to change that. Opens a
     browser window to log in if there's no saved session. A login failure
     or unexpected response shape returns ([], []) rather than crashing the
-    dashboard (AGENTS.md "handle failure without crashing")."""
+    dashboard (AGENTS.md "handle failure without crashing").
+
+    `base` may be a bare origin or a full course URL -- normalised to the
+    origin once here, so both the login step and every API call agree."""
+    origin = _origin(base)
     try:
-        return site.fetch_with_session(SITE, base, lambda req: _run(req, base))
+        return site.fetch_with_session(SITE, origin, lambda req: _run(req, origin))
     except Exception:
         return [], []
 
