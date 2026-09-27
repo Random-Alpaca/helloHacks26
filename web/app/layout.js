@@ -1,8 +1,8 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Laude",
-  description: "Sample-data preview of Laude, hosted on Vercel",
+  title: "Lauds",
+  description: "Sample-data preview of Lauds, hosted on Vercel",
 };
 
 export default function RootLayout({ children }) {

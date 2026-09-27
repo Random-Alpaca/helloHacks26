@@ -813,7 +813,7 @@ export default function App() {
           <div className="flex-1 overflow-y-auto">
             <div className="flex items-center gap-3 px-6 py-7">
               <div className="logo-mark"><span /><span /><span /></div>
-              <div className="text-xl font-bold tracking-tight">Laude</div>
+              <div className="text-xl font-bold tracking-tight">Lauds</div>
             </div>
 
             <nav className="mt-4 flex flex-col gap-1 px-3">
