@@ -1111,7 +1111,7 @@ export default function App() {
                   </div>
                   <div>
                     {topAssignments.map((item) => (
-                      <div key={item.id} className="assignment-row">
+                      <div key={itemKey(item)} className="assignment-row">
                         <input
                           type="checkbox"
                           aria-label={`Mark "${item.title}" as done`}
@@ -1204,7 +1204,7 @@ export default function App() {
                     </div>
                   ) : (
                     visibleAnnouncements.map((item) => (
-                      <div key={item.id} className="assignment-row">
+                      <div key={itemKey(item)} className="assignment-row">
                         <span className="course-mark">{item.course.slice(0, 2)}</span>
                         <div className="min-w-0 flex-1">
                           <div className="truncate font-bold">{item.title}</div>
@@ -1229,7 +1229,7 @@ export default function App() {
                           {course.term} &middot; Grade: {course.grade == null ? "—" : `${course.grade}%`}
                         </div>
                         {selectCourseItems(activeItems, course.code, preferredKinds).map((item) => (
-                          <div key={item.id} className={`assignment-row ${isOverdue(item, now) ? "due-now" : ""}`}>
+                          <div key={itemKey(item)} className={`assignment-row ${isOverdue(item, now) ? "due-now" : ""}`}>
                             <input
                               type="checkbox"
                               aria-label={`Mark "${item.title}" as done`}
@@ -1253,7 +1253,7 @@ export default function App() {
                 ) : (
                   <>
                     {visible.map((item) => (
-                      <div key={item.id} className="assignment-row">
+                      <div key={itemKey(item)} className="assignment-row">
                         <input
                           type="checkbox"
                           aria-label={`Mark "${item.title}" as done`}
