@@ -29,16 +29,17 @@ ALLOWED_ORIGIN = "http://localhost:3000"
 
 
 def _item_of(row):
-    code, category, kind, title, due, url, done = row
+    code, category, kind, title, due, url, done, source = row
     return Item(course=code, category=category, kind=kind, title=title,
-                due=datetime.fromisoformat(due), url=url, source="", done=bool(done) if done is not None else None)
+                due=datetime.fromisoformat(due), url=url, source=source, done=bool(done) if done is not None else None)
 
 
 def _row_to_dict(row, now):
-    code, category, kind, title, due, url, done = row
+    code, category, kind, title, due, url, done, source = row
     item = _item_of(row)
     return {
         "course": code, "category": category, "kind": kind, "title": title, "due": due, "url": url,
+        "source": source,
         "done": bool(done) if done is not None else None,
         "status": status_of(item, now),
         "urgency": classify_urgency(title, item.due, now),

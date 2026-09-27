@@ -14,7 +14,7 @@ def test_save_and_upcoming():
     conn = db.connect(":memory:")
     db.save(conn, [COURSE], [QUIZ], [BOOK])
     rows = db.upcoming(conn)
-    assert rows == [("CPSC 121", "deadline", "quiz", "Quiz 2", "2026-09-30T06:59:00", "https://x/q/1", None)]
+    assert rows == [("CPSC 121", "deadline", "quiz", "Quiz 2", "2026-09-30T06:59:00", "https://x/q/1", None, "canvas")]
     assert conn.execute("SELECT isbn FROM textbooks").fetchall() == [("123",)]
 
 
