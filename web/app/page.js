@@ -24,6 +24,7 @@ import {
   mergeMeetings,
   monthGrid,
   PREFERRED_KIND_OPTIONS,
+  pushToHostedStore,
   readPreferredKindsCookie,
   selectActiveItems,
   selectConnections,
@@ -264,12 +265,15 @@ function CalendarSection({ items, meetings, now, onToggleItemDone }) {
   );
 }
 
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind, onConnectHosted, hostedConnected }) {
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind, onConnectHosted, hostedConnected, allItems, allCoursesForPush }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
   const [customDomain, setCustomDomain] = useState("");
   const [feedUrlInput, setFeedUrlInput] = useState("");
   const [hostedKeyInput, setHostedKeyInput] = useState("");
+  const [pushBase, setPushBase] = useState("https://hello-hacks26-one.vercel.app");
+  const [pushKeyInput, setPushKeyInput] = useState("");
+  const [pushStatus, setPushStatus] = useState(null);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
   const byId = Object.fromEntries(connections.map((c) => [c.id, c]));
@@ -598,6 +602,65 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
         )}
         {workdayStatus && <div className="mt-3 text-xs text-[var(--muted)]">{workdayStatus}</div>}
         {error && <div className="connect-error mt-3">{error}</div>}
+      </section>
+
+      <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
+        <div className="mb-1 text-xl font-bold tracking-tight">Advanced: real Canvas / PrairieLearn login</div>
+        <div className="mb-5 text-sm text-[var(--muted)]">
+          This uses Playwright to open a real browser window on <strong className="text-[var(--ink)]">your own machine</strong> so you log in yourself - no website, including this one, can install software or open a browser for you. That has to run from a terminal.
+        </div>
+        <div className="mb-4 rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4">
+          <div className="mb-2 text-xs font-bold text-[var(--muted)]">
+            {isLocalMode() ? "✓ Detected: this page is running locally right now." : "Not running locally in this browser - one-time setup, in a terminal:"}
+          </div>
+          {!isLocalMode() && (
+            <pre className="overflow-x-auto rounded-md bg-[var(--surface)] p-3 text-[0.7rem] leading-relaxed">
+{`brew install git gh uv
+gh repo clone terraceonhigh/helloHacks26
+cd helloHacks26 && uv sync
+uv run playwright install chromium
+uv run streamlit run app.py`}
+            </pre>
+          )}
+        </div>
+        {isLocalMode() && (
+          <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4">
+            <div className="mb-2 text-sm font-bold">Push what you just logged into onto your hosted dashboard</div>
+            <div className="mb-3 text-xs text-[var(--muted)]">
+              Connect Canvas/PrairieLearn above first, then send those real items to your hosted hub (the same sync key the extension popup shows) so they show up everywhere, not just here.
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="url"
+                value={pushBase}
+                onChange={(e) => setPushBase(e.target.value)}
+                placeholder="https://your-hub.vercel.app"
+                aria-label="Hosted hub URL"
+                className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 py-1 text-xs"
+              />
+              <input
+                type="text"
+                value={pushKeyInput}
+                onChange={(e) => setPushKeyInput(e.target.value)}
+                placeholder="Sync key from the extension"
+                aria-label="Sync key to push with"
+                className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 py-1 text-xs"
+              />
+              <AppButton
+                disabled={busy !== null || !pushKeyInput || !pushBase || allItems.length === 0}
+                onClick={() => run("push", async () => {
+                  const stored = await pushToHostedStore(pushBase.replace(/\/$/, ""), pushKeyInput.trim(), allItems, allCoursesForPush);
+                  setPushStatus(`Pushed ${stored} item${stored === 1 ? "" : "s"}.`);
+                })}
+                className="toggle-pill"
+              >
+                {busy === "push" ? "Pushing…" : "Push now"}
+              </AppButton>
+            </div>
+            {allItems.length === 0 && <div className="mt-2 text-[0.7rem] text-[var(--muted)]">Nothing real loaded yet - connect Canvas or PrairieLearn above first.</div>}
+            {pushStatus && <div className="mt-2 text-[0.7rem] text-[var(--muted)]">{pushStatus}</div>}
+          </div>
+        )}
       </section>
 
       <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
@@ -963,6 +1026,8 @@ export default function App() {
               onTogglePreferredKind={togglePreferredKind}
               onConnectHosted={connectHostedStore}
               hostedConnected={storeItems.length > 0 || storeCourses.length > 0}
+              allItems={allItems}
+              allCoursesForPush={allCourses}
             />
           ) : activeNav === "Schedule" ? (
             <section className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-card)]">

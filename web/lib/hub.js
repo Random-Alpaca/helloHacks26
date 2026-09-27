@@ -365,6 +365,35 @@ export async function startHostedSession(key) {
   return res.ok;
 }
 
+// Push this browser's currently-loaded data - typically real Canvas/
+// PrairieLearn rows from a local Playwright login (hub/site.py), only ever
+// possible in local mode - to the hosted store, so it shows up on the
+// hosted dashboard too. Grouped by source since /api/sync's body carries
+// exactly one source per call (hub/hosted.py's parse_sync). Returns the
+// total item count actually stored.
+export async function pushToHostedStore(hostedBase, key, items, courses) {
+  const bySource = new Map();
+  for (const item of items) {
+    if (!item.source) continue;
+    if (!bySource.has(item.source)) bySource.set(item.source, []);
+    bySource.get(item.source).push({
+      course: item.course, category: item.category, kind: item.kind, title: item.title,
+      due: item.due, url: item.url, source: item.source, done: item.done ?? null,
+    });
+  }
+  let stored = 0;
+  for (const [source, sourceItems] of bySource) {
+    const res = await fetch(`${hostedBase}/api/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ source, courses, items: sourceItems }),
+    });
+    if (!res.ok) throw new Error(`Push failed for ${source}: ${res.status}`);
+    stored += (await res.json()).items ?? 0;
+  }
+  return stored;
+}
+
 // {items, courses} from the hosted store, or null when there's no session
 // (401) or no store (503) - never throws for those.
 export async function fetchHostedStore() {
