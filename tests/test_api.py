@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 
 from hub import db
-from hub.api import ALLOWED_ORIGIN, Handler, _upcoming
+from hub.api import ALLOWED_ORIGIN, Handler, _announcements, _upcoming
 from hub.models import Course, Item
 
 NOW = datetime.now(timezone.utc)
@@ -40,6 +40,19 @@ def test_sorted_most_urgent_first():
     db.save(conn, [COURSE], [quiet, urgent])
     rows = _upcoming(conn)
     assert rows[0]["title"] == "Final exam"
+
+
+def test_announcements_excludes_undated_items_that_are_not_announcements():
+    # An undated Canvas assignment (hub/canvas.py's to_undated_item, #43) or
+    # an unopened PrairieLearn assessment has no due date either, and used to
+    # leak into this feed looking like an announcement.
+    conn = db.connect(":memory:")
+    announcement = Item(course="CPSC 121", category="task", kind="announcement", title="Welcome!",
+                         due=None, url="https://x/a", source="canvas")
+    undated_assignment = Item(course="CPSC 121", category="task", kind="assignment", title="Reading response",
+                               due=None, url="https://x/b", source="canvas")
+    db.save(conn, [COURSE], [announcement, undated_assignment])
+    assert [r["title"] for r in _announcements(conn)] == ["Welcome!"]
 
 
 def _running_server(tmp_path, monkeypatch):
