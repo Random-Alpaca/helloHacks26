@@ -8,6 +8,10 @@ from hub.models import Course, Meeting
 
 _SHEET_NAME = "View My Courses"
 _COURSE_HEADER_ALIASES = {"course listing", "course"}
+# Zero-based ceilings, same values as web/lib/workday.js's MAX_SANE_ROW/COL.
+# A real export is a few hundred rows; these only bound pathological files.
+_MAX_SANE_ROW = 10_000
+_MAX_SANE_COL = 500
 
 # Other columns on the same sheet/row hub/workday.py's course parser already
 # reads - both ignored until now. Same file, same header row, no new
@@ -58,18 +62,26 @@ def _course_from_listing(listing, term):
     )
 
 
-def _load_rows(path):
-    # read_only=True trusts the sheet's declared dimension, which real
-    # Workday exports understate (confirmed against a real export) - it
-    # silently truncates to almost nothing. Non-read-only parses actual
-    # cells instead.
-    workbook = openpyxl.load_workbook(path, read_only=False, data_only=True)
-    sheet = workbook[_SHEET_NAME] if _SHEET_NAME in workbook.sheetnames else workbook.active
-    return list(sheet.iter_rows(values_only=True))
+def _read_rows(path):
+    # Two real-export hazards, handled together (#49):
+    # - the declared <dimension> understates the populated range, so a
+    #   read_only sheet that trusts it silently truncates. reset_dimensions()
+    #   drops the declared range and streams the cells actually present.
+    # - a stray cell at Excel's max address (XFD1048576) made read_only=False
+    #   iter_rows() materialise the full 1M x 16K grid (>60s, >2GB).
+    #   Streaming + the same sane ceilings web/lib/workday.js uses keep it
+    #   bounded.
+    workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        sheet = workbook[_SHEET_NAME] if _SHEET_NAME in workbook.sheetnames else workbook.active
+        sheet.reset_dimensions()
+        return [row[:_MAX_SANE_COL + 1] for row in sheet.iter_rows(max_row=_MAX_SANE_ROW + 1, values_only=True)]
+    finally:
+        workbook.close()
 
 
 def parse_workday_courses(path, term):
-    rows = _load_rows(path)
+    rows = _read_rows(path)
     header_row_index, columns = _find_header_row(rows)
     if header_row_index is None:
         return []
@@ -164,7 +176,7 @@ def parse_workday_schedule(path, term, source="workday"):
     (never raises) on an older export missing those columns, or a row with
     no parseable meeting pattern - same "degrade, don't crash" contract as
     parse_workday_courses."""
-    rows = _load_rows(path)
+    rows = _read_rows(path)
     header_row_index, columns = _find_header_row(rows)
     if header_row_index is None or "meeting_patterns" not in columns:
         return []
