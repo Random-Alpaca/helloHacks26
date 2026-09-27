@@ -1,4 +1,4 @@
-from hub.canvas import done_from_submissions, to_course, to_item, unwrap
+from hub.canvas import done_from_submissions, to_course, to_item, to_undated_item, unwrap
 
 
 def test_unwrap_strips_guard():
@@ -18,6 +18,24 @@ def test_mapping():
     assert (event.kind, event.category) == ("event", "deadline")
     assignment = to_item({"plannable_type": "discussion_topic", "plannable": {}}, {})
     assert (assignment.kind, assignment.category) == ("assignment", "task")
+
+
+def test_calendar_event_url_is_not_double_prefixed():
+    # planner/items' html_url is already absolute for calendar events, unlike
+    # assignments' relative one - BASE + url used to double it (#15).
+    event = to_item({"plannable_type": "calendar_event",
+                     "plannable": {"title": "Office hours"},
+                     "html_url": "https://canvas.ubc.ca/calendar?event_id=9"}, {})
+    assert event.url == "https://canvas.ubc.ca/calendar?event_id=9"
+
+
+def test_to_undated_item():
+    a = {"name": "Reading response", "html_url": "/courses/7/assignments/9",
+         "has_submitted_submissions": True}
+    i = to_undated_item(a, "CPSC 121")
+    assert (i.course, i.kind, i.category, i.title, i.due, i.done) == (
+        "CPSC 121", "assignment", "task", "Reading response", None, True)
+    assert i.url == "https://canvas.ubc.ca/courses/7/assignments/9"
 
 
 def test_done_from_submissions():
