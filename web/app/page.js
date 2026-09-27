@@ -265,7 +265,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
         <div className="mb-5 text-sm text-[var(--muted)]">
           {isLocalMode()
             ? "What's actually feeding your dashboard right now."
-            : "This is the hosted demo, so Canvas and PrairieLearn can't connect here - run Hub locally to link a real account (see the README)."}
+            : "This is the hosted demo: Sample data is a made-up demo student, run through Hub's real adapters. Canvas and PrairieLearn can't connect here - run Hub locally to link a real account (see the README)."}
         </div>
 
         <label className="toggle-pill mb-5 flex w-full items-center justify-between">
@@ -666,7 +666,10 @@ export default function App() {
   const topAssignments = selectVisibleItems(activeItems, { tab: "all", hideOverdue: false, showN: 5, now, preferredKinds });
   const nextUp = selectNextUp(activeItems, preferredKinds);
   const days = weekDates(now);
-  const connections = selectConnections(allItems, importedCourses);
+  // Sample/demo rows now carry a real `source` (the hosted demo runs the real
+  // adapters over a fake student), but nothing is actually connected - only
+  // feed items count toward Settings' Connections then, same as before.
+  const connections = selectConnections(isLocalMode() && !sampleMode ? allItems : feedItems, importedCourses);
 
   const customStyle = theme === "custom"
     ? { "--page": customColors.page, "--surface": customColors.surface, "--ink": customColors.ink, "--accent": customColors.accent }

@@ -2,7 +2,10 @@
 //   - Local mode: NEXT_PUBLIC_HUB_API is set -> talk to Jacky's hub/api.py
 //     over http://127.0.0.1:<port>, which returns rows already ranked and
 //     annotated with status/urgency from hub.models (never recomputed here).
-//   - Sample mode (hosted Vercel default): no API reachable, fixed fake data.
+//   - Sample mode (hosted Vercel default): no local API. Rows come from the
+//     hosted GET /api/demo (web/api/demo.py): a fake "Demo Student" run
+//     through the real hub/ adapters and fusion. If that fails, the fixed
+//     SAMPLE_ROWS below, so the page never breaks.
 
 const URGENCY_ORDER = ["overdue", "critical", "high", "medium", "low"];
 
@@ -128,9 +131,42 @@ function normaliseApiItem(row, i) {
 // the "Sample data" toggle (app.py parity), not just the env var. The env
 // var controls whether local mode is *possible* at all (and so whether the
 // toggle/Connect buttons show); the toggle controls what's actually fetched.
+// Hosted Sample mode only (no local API): GET /api/demo once per page load,
+// shared by fetchUpcoming/fetchAnnouncements/fetchCourses. Resolves to null
+// on any failure so each caller falls back to its built-in sample data -
+// never throws. `fetchImpl` is injectable for tests.
+let demoPromise = null;
+
+export function fetchDemo(fetchImpl = globalThis.fetch) {
+  if (!demoPromise) {
+    demoPromise = (async () => {
+      try {
+        const res = await fetchImpl("/api/demo");
+        if (!res.ok) return null;
+        const body = await res.json();
+        if (!body || !Array.isArray(body.items)) return null;
+        return {
+          items: body.items.map(normaliseApiItem),
+          announcements: Array.isArray(body.announcements) ? body.announcements.map(normaliseApiItem) : [],
+          courses: Array.isArray(body.courses) ? body.courses : SAMPLE_COURSES,
+        };
+      } catch {
+        return null;
+      }
+    })();
+  }
+  return demoPromise;
+}
+
+// Test-only: forget the cached /api/demo response.
+export function resetDemoCache() {
+  demoPromise = null;
+}
+
 export async function fetchUpcoming(useSample) {
   const base = apiBase();
-  if (!base || useSample) return sampleItems();
+  if (!base) return (await fetchDemo())?.items ?? sampleItems();
+  if (useSample) return sampleItems();
   const res = await fetch(`${base}/api/upcoming`);
   if (!res.ok) throw new Error(`GET /api/upcoming failed: ${res.status}`);
   const rows = await res.json();
@@ -139,11 +175,13 @@ export async function fetchUpcoming(useSample) {
 
 // Announcements never carry a due date (they're informational, not a task -
 // see hub/canvas.py's to_item()), so they're a separate feed from
-// fetchUpcoming() rather than items mixed into it. Sample mode has none -
-// none of SAMPLE_ROWS is announcement-shaped, so there's nothing to fake.
+// fetchUpcoming() rather than items mixed into it. The hosted demo carries
+// its own; the SAMPLE_ROWS fallback has none - none of them is
+// announcement-shaped, so there's nothing to fake.
 export async function fetchAnnouncements(useSample) {
   const base = apiBase();
-  if (!base || useSample) return [];
+  if (!base) return (await fetchDemo())?.announcements ?? [];
+  if (useSample) return [];
   const res = await fetch(`${base}/api/announcements`);
   if (!res.ok) throw new Error(`GET /api/announcements failed: ${res.status}`);
   const rows = await res.json();
@@ -152,7 +190,8 @@ export async function fetchAnnouncements(useSample) {
 
 export async function fetchCourses(useSample) {
   const base = apiBase();
-  if (!base || useSample) return SAMPLE_COURSES;
+  if (!base) return (await fetchDemo())?.courses ?? SAMPLE_COURSES;
+  if (useSample) return SAMPLE_COURSES;
   const res = await fetch(`${base}/api/courses`);
   if (!res.ok) throw new Error(`GET /api/courses failed: ${res.status}`);
   return res.json();
