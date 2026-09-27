@@ -233,6 +233,19 @@ export function selectActiveItems(items) {
   return items.filter((item) => !isDone(item));
 }
 
+// A hidden course (Settings - for the old/inactive enrollments Canvas keeps
+// listing) disappears everywhere: the sidebar, filter chips, Courses tab,
+// and any of its items in every other view - not just its own row. This is
+// display-only, client-side (hiddenCourses is never sent anywhere) - the
+// course and its items stay exactly as fetched in hub.db.
+export function selectVisibleCourses(courses, hiddenCourses) {
+  return courses.filter((c) => !hiddenCourses.includes(c.code));
+}
+
+export function hideCourseItems(items, hiddenCourses) {
+  return items.filter((item) => !hiddenCourses.includes(item.course));
+}
+
 // The flat item list for a given tab/toggle/limit combination. Expects
 // already-active (non-done) items - see selectActiveItems.
 export function selectVisibleItems(items, { tab, hideOverdue, showN, now }) {

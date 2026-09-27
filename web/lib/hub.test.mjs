@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { selectConnections } from "./hub.js";
+import { hideCourseItems, selectConnections, selectVisibleCourses } from "./hub.js";
 
 test("selectConnections: no data means nothing is connected", () => {
   const connections = selectConnections([], []);
@@ -43,4 +43,18 @@ test("selectConnections: an unrecognized source shows up as its own custom Prair
   assert.equal(custom.detail, "2 items");
   // and it shouldn't duplicate or displace the known providers
   assert.equal(connections.filter((c) => c.id === "prairielearn").length, 1);
+});
+
+test("selectVisibleCourses: drops hidden courses, keeps everything else", () => {
+  const courses = [{ code: "CPSC 121" }, { code: "OLD 100" }, { code: "MATH 100" }];
+  assert.deepEqual(
+    selectVisibleCourses(courses, ["OLD 100"]).map((c) => c.code),
+    ["CPSC 121", "MATH 100"],
+  );
+  assert.deepEqual(selectVisibleCourses(courses, []).map((c) => c.code), ["CPSC 121", "OLD 100", "MATH 100"]);
+});
+
+test("hideCourseItems: drops items belonging to a hidden course", () => {
+  const items = [{ course: "CPSC 121" }, { course: "OLD 100" }];
+  assert.deepEqual(hideCourseItems(items, ["OLD 100"]).map((i) => i.course), ["CPSC 121"]);
 });

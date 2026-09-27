@@ -12,6 +12,7 @@ import {
   fetchUpcoming,
   formatDue,
   hasItemDueOn,
+  hideCourseItems,
   isDone,
   isLocalMode,
   isOverdue,
@@ -20,6 +21,7 @@ import {
   selectConnections,
   selectCourseItems,
   selectNextUp,
+  selectVisibleCourses,
   selectVisibleItems,
   weekDates,
 } from "../lib/hub";
@@ -77,7 +79,7 @@ const CUSTOM_COLOR_FIELDS = [
 
 const WEEKDAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
 
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported }) {
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, allCourses, hiddenCourses, onToggleCourseHidden }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
   const [customDomain, setCustomDomain] = useState("");
@@ -280,6 +282,30 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
         {workdayStatus && <div className="mt-3 text-xs text-[var(--muted)]">{workdayStatus}</div>}
         {error && <div className="connect-error mt-3">{error}</div>}
       </section>
+
+      <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
+        <div className="mb-1 text-xl font-bold tracking-tight">Courses</div>
+        <div className="mb-5 text-sm text-[var(--muted)]">
+          Hide old or inactive courses a provider still lists (Canvas, especially, likes to keep listing ones you're not really in this term) - a hidden course disappears everywhere, not just here.
+        </div>
+        <div className="divide-y divide-[var(--line)]">
+          {allCourses.map((c) => (
+            <label key={c.code} className="flex cursor-pointer items-center justify-between gap-3 py-3">
+              <div className="min-w-0">
+                <div className="font-bold">{c.code}</div>
+                <div className="truncate text-xs text-[var(--muted)]">{c.title}</div>
+              </div>
+              <input
+                type="checkbox"
+                checked={!hiddenCourses.includes(c.code)}
+                onChange={(e) => onToggleCourseHidden(c.code, e.target.checked)}
+                aria-label={`Show ${c.code}`}
+              />
+            </label>
+          ))}
+          {allCourses.length === 0 && <div className="py-3 text-sm text-[var(--muted)]">No courses yet.</div>}
+        </div>
+      </section>
     </div>
   );
 }
@@ -305,6 +331,7 @@ export default function App() {
   const [fetchedCourses, setFetchedCourses] = useState([]);
   const [importedCourses, setImportedCourses] = useState([]);
   const [loadError, setLoadError] = useState(null);
+  const [hiddenCourses, setHiddenCourses] = useState([]);
 
   useEffect(() => {
     setTheme(localStorage.getItem("gather-theme") || "everforest");
@@ -320,6 +347,12 @@ export default function App() {
     // keeps seeing it.
     const savedSampleMode = localStorage.getItem("gather-sample-mode");
     if (savedSampleMode !== null) setSampleMode(savedSampleMode === "true");
+    try {
+      const saved = JSON.parse(localStorage.getItem("gather-hidden-courses"));
+      if (Array.isArray(saved)) setHiddenCourses(saved);
+    } catch {
+      // ignore malformed/missing storage - keep the default (nothing hidden)
+    }
   }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -331,6 +364,13 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("gather-sample-mode", String(sampleMode));
   }, [sampleMode]);
+  useEffect(() => {
+    localStorage.setItem("gather-hidden-courses", JSON.stringify(hiddenCourses));
+  }, [hiddenCourses]);
+
+  function toggleCourseHidden(code, visible) {
+    setHiddenCourses((prev) => (visible ? prev.filter((c) => c !== code) : [...prev, code]));
+  }
 
   async function load(useSample) {
     try {
@@ -364,9 +404,10 @@ export default function App() {
   }, [sampleMode]);
 
   const now = new Date();
-  const courses = mergeCourses(fetchedCourses, importedCourses);
-  const activeItems = selectActiveItems(items);
-  const doneCount = items.filter(isDone).length;
+  const allCourses = mergeCourses(fetchedCourses, importedCourses);
+  const courses = selectVisibleCourses(allCourses, hiddenCourses);
+  const activeItems = hideCourseItems(selectActiveItems(items), hiddenCourses);
+  const doneCount = hideCourseItems(items, hiddenCourses).filter(isDone).length;
   const overdueCount = activeItems.filter((item) => isOverdue(item, now)).length;
   const dueThisWeekCount = activeItems.filter((item) => {
     if (!item.due) return false;
@@ -386,10 +427,11 @@ export default function App() {
   const visible = selectVisibleItems(filteredByCourse, { tab: activeNavTab, hideOverdue, showN, now });
 
   const searchedAnnouncements = useMemo(() => {
+    const visibleAnnouncementsBase = hideCourseItems(announcements, hiddenCourses);
     const term = search.toLowerCase();
-    if (!term) return announcements;
-    return announcements.filter((item) => item.title.toLowerCase().includes(term) || item.course.toLowerCase().includes(term));
-  }, [announcements, search]);
+    if (!term) return visibleAnnouncementsBase;
+    return visibleAnnouncementsBase.filter((item) => item.title.toLowerCase().includes(term) || item.course.toLowerCase().includes(term));
+  }, [announcements, hiddenCourses, search]);
   const visibleAnnouncements = (activeFilter === "All" ? searchedAnnouncements : searchedAnnouncements.filter((item) => item.course === activeFilter)).slice(0, showN);
 
   const topAssignments = selectVisibleItems(activeItems, { tab: "all", hideOverdue: false, showN: 5, now });
@@ -473,6 +515,9 @@ export default function App() {
               onSampleModeChange={setSampleMode}
               onConnected={() => load(false)}
               onWorkdayImported={importWorkdayCourses}
+              allCourses={allCourses}
+              hiddenCourses={hiddenCourses}
+              onToggleCourseHidden={toggleCourseHidden}
             />
           ) : (
           <>
