@@ -1,0 +1,9 @@
+{
+  "1001": [
+    {"name": "Problem Set 4", "due_at": "{{due:+1d@23:59}}", "html_url": "/courses/1001/assignments/5001", "has_submitted_submissions": false}
+  ],
+  "1002": [],
+  "1003": [
+    {"name": "Reading journal (ongoing)", "due_at": null, "html_url": "/courses/1003/assignments/5203", "has_submitted_submissions": false}
+  ]
+}

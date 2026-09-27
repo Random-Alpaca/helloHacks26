@@ -426,7 +426,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
         <div className="mb-5 text-sm text-[var(--muted)]">
           {isLocalMode()
             ? "What's actually feeding your dashboard right now."
-            : "Connect your hosted data with a sync key, then refresh signed-in providers through the browser extension."}
+            : "This is the hosted demo: Sample data is a made-up demo student, run through Hub's real adapters. Connect your hosted data with a sync key, then refresh signed-in providers through the browser extension."}
         </div>
 
         <label className="toggle-pill mb-5 flex w-full items-center justify-between">
@@ -991,7 +991,12 @@ export default function App() {
   const topAssignments = selectVisibleItems(activeItems, { tab: "all", hideOverdue: false, showN: 5, now, preferredKinds });
   const nextUp = selectNextUp(activeItems, preferredKinds);
   const days = weekDates(now);
-  const connections = selectConnections(allItems, meetings);
+  // Sample/demo rows now carry a real `source` (the hosted demo runs the real
+  // adapters over a fake student), but nothing is actually connected - so
+  // outside local live mode only the hosted store's and the feed's items
+  // count toward Settings' Connections, never the sample/demo `items`.
+  const connectedItems = isLocalMode() && !sampleMode ? allItems : mergeItems(storeItems, feedItems);
+  const connections = selectConnections(connectedItems, meetings);
 
   const customStyle = theme === "custom"
     ? { "--page": customColors.page, "--surface": customColors.surface, "--ink": customColors.ink, "--accent": customColors.accent }
