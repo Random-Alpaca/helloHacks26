@@ -158,6 +158,14 @@ def fetch():
 def _run(req):
     courses, items = [], []
     for ci_id, title in _course_instances(req):
+        if not COURSE_TITLE.match(title):
+            # ponytail: skip instances that don't look like a UBC course code -
+            # this is also what filters out PrairieLearn's own built-in example
+            # course, which the wider instructor-link matching above now finds
+            # too and would otherwise show up as a phantom "Spring 2015" course
+            # (#15). Upgrade: ask PL for real course metadata if that's ever
+            # exposed, instead of sniffing the title.
+            continue
         course = to_course(ci_id, title)
         courses.append(course)
         items += _assessments(req, ci_id, course.code)

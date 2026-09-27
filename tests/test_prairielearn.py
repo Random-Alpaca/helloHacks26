@@ -1,7 +1,7 @@
 import pytest
 from bs4 import BeautifulSoup
 
-from hub.prairielearn import due_from_popover, to_course, to_item, _course_instances
+from hub.prairielearn import BASE, due_from_popover, to_course, to_item, _course_instances, _run
 
 # Real markup captured from a live UBC PrairieLearn course (CPSC 317, 2026W1).
 OPEN_ROW = """
@@ -109,3 +109,37 @@ def test_course_instances_matches_both_student_and_instructor_links():
     <a href="/pl/course_instance/2/instructor">CPSC 121 (TA)</a>
     """
     assert _course_instances(_FakeReq(html)) == [("1", "CPSC 317"), ("2", "CPSC 121 (TA)")]
+
+
+class _FakeMultiPageReq:
+    """Routes by path, keyed the way _get_soup builds them (BASE + path)."""
+
+    def __init__(self, pages):
+        self.pages = pages
+
+    def get(self, url):
+        self.html = self.pages[url[len(BASE):]]
+        return self
+
+    status = 200
+    ok = True
+
+    def text(self):
+        return self.html
+
+
+def test_run_skips_a_course_instance_whose_title_is_not_a_ubc_course_code():
+    # The wider instructor-link matching in _course_instances also picks up
+    # PrairieLearn's own built-in example course, whose title doesn't match a
+    # UBC course code - it used to come through as a phantom "Spring 2015"
+    # course (#15). No assessments page for id 2 in `pages`: if _run ever
+    # fetched it, this test would KeyError instead of just passing.
+    pages = {
+        "/": """
+            <a href="/pl/course_instance/1">CPSC 317: Internet Computing, 2026 Winter Term 1</a>
+            <a href="/pl/course_instance/2/instructor">Spring 2015</a>
+        """,
+        "/pl/course_instance/1/assessments": "<table><tbody></tbody></table>",
+    }
+    courses, items = _run(_FakeMultiPageReq(pages))
+    assert [c.code for c in courses] == ["CPSC 317"]
