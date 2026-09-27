@@ -8,6 +8,7 @@ import {
   connectPrairieLearnOk,
   displayLabel,
   fetchAnnouncements,
+  fetchCanvasFeed,
   fetchCourses,
   fetchUpcoming,
   formatDue,
@@ -17,6 +18,7 @@ import {
   isLocalMode,
   isOverdue,
   mergeCourses,
+  mergeItems,
   selectActiveItems,
   selectConnections,
   selectCourseItems,
@@ -80,10 +82,11 @@ const CUSTOM_COLOR_FIELDS = [
 const WEEKDAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
 const MAX_WORKDAY_FILE_BYTES = 5_000_000;
 
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, allCourses, hiddenCourses, onToggleCourseHidden }) {
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
   const [customDomain, setCustomDomain] = useState("");
+  const [feedUrlInput, setFeedUrlInput] = useState("");
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
   const byId = Object.fromEntries(connections.map((c) => [c.id, c]));
@@ -196,6 +199,51 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
               </AppButton>
             )}
           </div>
+
+          {!sampleMode && (
+            <div className="py-3">
+              {canvasFeedUrl ? (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4">
+                  <div>
+                    <div className="text-sm font-bold">Calendar feed connected</div>
+                    <div className="text-xs text-[var(--muted)]">
+                      {feedError ? feedError : `${feedItemCount} item${feedItemCount === 1 ? "" : "s"} from your feed`}
+                    </div>
+                  </div>
+                  <AppButton onClick={onDisconnectFeed} className="toggle-pill">Disconnect</AppButton>
+                </div>
+              ) : (
+                <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4">
+                  <div className="mb-2 text-sm font-bold">No local install? Paste your Canvas calendar feed instead</div>
+                  <ol className="mb-3 list-decimal space-y-0.5 pl-4 text-xs text-[var(--muted)]">
+                    <li>In Canvas, open <strong className="text-[var(--ink)]">Calendar</strong></li>
+                    <li>Click <strong className="text-[var(--ink)]">Calendar Feed</strong> (bottom right)</li>
+                    <li>Copy the link it gives you</li>
+                  </ol>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={feedUrlInput}
+                      onChange={(e) => setFeedUrlInput(e.target.value)}
+                      placeholder="https://canvas.ubc.ca/feeds/calendars/....ics"
+                      aria-label="Canvas calendar feed URL"
+                      className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 py-1 text-xs"
+                    />
+                    <AppButton
+                      disabled={busy !== null || !feedUrlInput}
+                      onClick={() => run("canvas_feed", () => onConnectFeed(feedUrlInput))}
+                      className="toggle-pill"
+                    >
+                      {busy === "canvas_feed" ? "Connecting…" : "Connect"}
+                    </AppButton>
+                  </div>
+                  <div className="mt-2 text-[0.7rem] text-[var(--muted)]">
+                    Honest limits: the feed can&apos;t tell what you&apos;ve already submitted, and it skips assignments with no due date.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center justify-between gap-3 py-3">
             <div className="flex items-center gap-3">
@@ -342,6 +390,9 @@ export default function App() {
   const [importedCourses, setImportedCourses] = useState([]);
   const [loadError, setLoadError] = useState(null);
   const [hiddenCourses, setHiddenCourses] = useState([]);
+  const [canvasFeedUrl, setCanvasFeedUrl] = useState("");
+  const [feedItems, setFeedItems] = useState([]);
+  const [feedError, setFeedError] = useState(null);
 
   useEffect(() => {
     setTheme(localStorage.getItem("gather-theme") || "everforest");
@@ -363,6 +414,14 @@ export default function App() {
     } catch {
       // ignore malformed/missing storage - keep the default (nothing hidden)
     }
+    // The feed URL is a secret (works like a password) - localStorage only,
+    // never sent anywhere but /api/feed. Re-fetches automatically on every
+    // load so a saved connection keeps working without re-pasting the link.
+    const savedFeedUrl = localStorage.getItem("gather-canvas-feed-url");
+    if (savedFeedUrl) {
+      setCanvasFeedUrl(savedFeedUrl);
+      fetchCanvasFeed(savedFeedUrl).then(setFeedItems).catch((e) => setFeedError(e.message));
+    }
   }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -380,6 +439,21 @@ export default function App() {
 
   function toggleCourseHidden(code, visible) {
     setHiddenCourses((prev) => (visible ? prev.filter((c) => c !== code) : [...prev, code]));
+  }
+
+  async function connectCanvasFeed(url) {
+    const nextFeedItems = await fetchCanvasFeed(url);
+    setCanvasFeedUrl(url);
+    setFeedItems(nextFeedItems);
+    setFeedError(null);
+    localStorage.setItem("gather-canvas-feed-url", url);
+  }
+
+  function disconnectCanvasFeed() {
+    setCanvasFeedUrl("");
+    setFeedItems([]);
+    setFeedError(null);
+    localStorage.removeItem("gather-canvas-feed-url");
   }
 
   async function load(useSample) {
@@ -416,8 +490,9 @@ export default function App() {
   const now = new Date();
   const allCourses = mergeCourses(fetchedCourses, importedCourses);
   const courses = selectVisibleCourses(allCourses, hiddenCourses);
-  const activeItems = hideCourseItems(selectActiveItems(items), hiddenCourses);
-  const doneCount = hideCourseItems(items, hiddenCourses).filter(isDone).length;
+  const allItems = mergeItems(items, feedItems);
+  const activeItems = hideCourseItems(selectActiveItems(allItems), hiddenCourses);
+  const doneCount = hideCourseItems(allItems, hiddenCourses).filter(isDone).length;
   const overdueCount = activeItems.filter((item) => isOverdue(item, now)).length;
   const dueThisWeekCount = activeItems.filter((item) => {
     if (!item.due) return false;
@@ -447,7 +522,7 @@ export default function App() {
   const topAssignments = selectVisibleItems(activeItems, { tab: "all", hideOverdue: false, showN: 5, now });
   const nextUp = selectNextUp(activeItems);
   const days = weekDates(now);
-  const connections = selectConnections(items, importedCourses);
+  const connections = selectConnections(allItems, importedCourses);
 
   const customStyle = theme === "custom"
     ? { "--page": customColors.page, "--surface": customColors.surface, "--ink": customColors.ink, "--accent": customColors.accent }
@@ -528,6 +603,11 @@ export default function App() {
               allCourses={allCourses}
               hiddenCourses={hiddenCourses}
               onToggleCourseHidden={toggleCourseHidden}
+              canvasFeedUrl={canvasFeedUrl}
+              feedItemCount={feedItems.length}
+              feedError={feedError}
+              onConnectFeed={connectCanvasFeed}
+              onDisconnectFeed={disconnectCanvasFeed}
             />
           ) : (
           <>
@@ -597,6 +677,9 @@ export default function App() {
                           <div className="truncate font-bold">{item.title}</div>
                           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-[var(--muted)]">
                             <span>{item.course}</span><span>·</span><span>{item.kind}</span>
+                            {/* The boxed due-date badge below is sm:+ only - repeat it as
+                                plain text here so due dates aren't lost below that breakpoint. */}
+                            <span className={`sm:hidden ${isOverdue(item, now) ? "font-bold text-[var(--danger)]" : ""}`}>· {formatDue(item.due)}</span>
                           </div>
                         </div>
                         <div className={`hidden shrink-0 rounded-lg px-3 py-2 text-right sm:block ${isOverdue(item, now) ? "due-now" : ""}`}>
