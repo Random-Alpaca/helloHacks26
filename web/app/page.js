@@ -5,6 +5,7 @@ import {
   connectCanvas,
   connectPrairieLearn,
   displayLabel,
+  fetchAnnouncements,
   fetchCourses,
   fetchUpcoming,
   formatDue,
@@ -36,6 +37,7 @@ function Icon({ name, className = "size-5" }) {
     spark: <><path d="m12 3 1.3 4.2L17 9l-3.7 1.8L12 15l-1.3-4.2L7 9l3.7-1.8L12 3Z" /><path d="m5 14 .7 2.3L8 17l-2.3.7L5 20l-.7-2.3L2 17l2.3-.7L5 14Z" /></>,
     settings: <><path d="M4 6h10M18 6h2M4 18h10M18 18h2M4 12h4M12 12h8" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="16" cy="18" r="2" /></>,
     material: <><path d="M7 3h7l4 4v14H7z" /><path d="M14 3v4h4M9 12h6M9 16h6" /></>,
+    announcement: <><path d="M9 5 3 9v6h6l6 4V1z" /><path d="M16 8a4.5 4.5 0 0 1 0 8" /></>,
   };
   return <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
@@ -49,6 +51,7 @@ const NAV_ITEMS = [
   { label: "Assignments", icon: "tasks", tab: "task" },
   { label: "Calendar", icon: "calendar", tab: "deadline" },
   { label: "Materials", icon: "material", tab: "material" },
+  { label: "Announcements", icon: "announcement", tab: "announcements" },
   { label: "Courses", icon: "courses", tab: "courses" },
   { label: "Settings", icon: "settings", tab: "settings" },
 ];
@@ -237,6 +240,7 @@ export default function App() {
   // st.toggle(value=True). Overridden below by whatever was saved last.
   const [sampleMode, setSampleMode] = useState(!isLocalMode());
   const [items, setItems] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
   const [fetchedCourses, setFetchedCourses] = useState([]);
   const [importedCourses, setImportedCourses] = useState([]);
   const [loadError, setLoadError] = useState(null);
@@ -269,12 +273,18 @@ export default function App() {
 
   async function load(useSample) {
     try {
-      const [nextItems, nextCourses] = await Promise.all([fetchUpcoming(useSample), fetchCourses(useSample)]);
+      const [nextItems, nextAnnouncements, nextCourses] = await Promise.all([
+        fetchUpcoming(useSample),
+        fetchAnnouncements(useSample),
+        fetchCourses(useSample),
+      ]);
       setItems(nextItems);
+      setAnnouncements(nextAnnouncements);
       setFetchedCourses(nextCourses);
       setLoadError(null);
     } catch (e) {
       setItems([]);
+      setAnnouncements([]);
       setFetchedCourses([]);
       setLoadError(e.message);
     }
@@ -310,6 +320,14 @@ export default function App() {
 
   const filteredByCourse = activeFilter === "All" ? searched : searched.filter((item) => item.course === activeFilter);
   const visible = selectVisibleItems(filteredByCourse, { tab: activeNavTab, hideOverdue, showN, now });
+
+  const searchedAnnouncements = useMemo(() => {
+    const term = search.toLowerCase();
+    if (!term) return announcements;
+    return announcements.filter((item) => item.title.toLowerCase().includes(term) || item.course.toLowerCase().includes(term));
+  }, [announcements, search]);
+  const visibleAnnouncements = (activeFilter === "All" ? searchedAnnouncements : searchedAnnouncements.filter((item) => item.course === activeFilter)).slice(0, showN);
+
   const nextUp = selectNextUp(activeItems);
   const days = weekDates(now);
   const connections = selectConnections(items, importedCourses);
@@ -443,14 +461,33 @@ export default function App() {
                   <input type="range" min={5} max={50} value={showN} onChange={(e) => setShowN(Number(e.target.value))} />{" "}
                   {showN}
                 </label>
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={hideOverdue} onChange={(e) => setHideOverdue(e.target.checked)} />
-                  Hide overdue
-                </label>
+                {activeNavTab !== "announcements" && (
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={hideOverdue} onChange={(e) => setHideOverdue(e.target.checked)} />
+                    Hide overdue
+                  </label>
+                )}
               </div>
 
               <div>
-                {activeNavTab === "courses" ? (
+                {activeNavTab === "announcements" ? (
+                  visibleAnnouncements.length === 0 ? (
+                    <div className="p-10 text-center text-sm text-[var(--muted)]">
+                      {sampleMode ? "No announcements in sample data." : "Nothing yet. Connect Canvas above."}
+                    </div>
+                  ) : (
+                    visibleAnnouncements.map((item) => (
+                      <div key={item.id} className="assignment-row">
+                        <span className="course-mark">{item.course.slice(0, 2)}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-bold">{item.title}</div>
+                          <div className="mt-1 text-xs font-medium text-[var(--muted)]">{item.course}</div>
+                        </div>
+                        <a href={item.url} aria-label="Open"><Icon name="arrow" className="size-4 shrink-0 text-[var(--muted-light)]" /></a>
+                      </div>
+                    ))
+                  )
+                ) : activeNavTab === "courses" ? (
                   courses.length === 0 ? (
                     <div className="p-10 text-center text-sm text-[var(--muted)]">
                       {sampleMode ? "No courses." : "Nothing yet. Connect Canvas above."}

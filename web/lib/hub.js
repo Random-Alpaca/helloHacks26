@@ -93,6 +93,19 @@ export async function fetchUpcoming(useSample) {
   return rows.map(normaliseApiItem);
 }
 
+// Announcements never carry a due date (they're informational, not a task -
+// see hub/canvas.py's to_item()), so they're a separate feed from
+// fetchUpcoming() rather than items mixed into it. Sample mode has none -
+// none of SAMPLE_ROWS is announcement-shaped, so there's nothing to fake.
+export async function fetchAnnouncements(useSample) {
+  const base = apiBase();
+  if (!base || useSample) return [];
+  const res = await fetch(`${base}/api/announcements`);
+  if (!res.ok) throw new Error(`GET /api/announcements failed: ${res.status}`);
+  const rows = await res.json();
+  return rows.map(normaliseApiItem);
+}
+
 export async function fetchCourses(useSample) {
   const base = apiBase();
   if (!base || useSample) return SAMPLE_COURSES;
