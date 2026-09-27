@@ -29,16 +29,18 @@ ALLOWED_ORIGIN = "http://localhost:3000"
 
 
 def _item_of(row):
-    code, category, kind, title, due, url, done = row
+    code, category, kind, title, due, url, done, source = row
     return Item(course=code, category=category, kind=kind, title=title,
-                due=datetime.fromisoformat(due), url=url, source="", done=bool(done) if done is not None else None)
+                due=datetime.fromisoformat(due) if due else None, url=url, source=source,
+                done=bool(done) if done is not None else None)
 
 
 def _row_to_dict(row, now):
-    code, category, kind, title, due, url, done = row
+    code, category, kind, title, due, url, done, source = row
     item = _item_of(row)
     return {
         "course": code, "category": category, "kind": kind, "title": title, "due": due, "url": url,
+        "source": source,
         "done": bool(done) if done is not None else None,
         "status": status_of(item, now),
         "urgency": classify_urgency(title, item.due, now),
@@ -52,6 +54,15 @@ def _upcoming(conn):
     rows = [r for r in db.upcoming(conn) if status_of(_item_of(r), now) != "done"]
     rows = sort_items(rows, now)
     return [_row_to_dict(r, now) for r in rows]
+
+
+def _announcements(conn):
+    """Undated items (announcements, and anything else without a real
+    deadline) - already most-recent-first from db.undated(). No urgency
+    ranking here, unlike _upcoming(): sort_items() needs a due date to rank
+    by, and these don't have one."""
+    now = datetime.now(timezone.utc)
+    return [_row_to_dict(r, now) for r in db.undated(conn)]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -91,6 +102,8 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/upcoming":
             self._json(_upcoming(db.connect()))
+        elif path == "/api/announcements":
+            self._json(_announcements(db.connect()))
         elif path == "/api/courses":
             conn = db.connect()
             self._json([{"code": c, "term": t, "title": ti, "grade": g} for c, t, ti, g in db.courses(conn)])

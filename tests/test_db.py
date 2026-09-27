@@ -14,7 +14,7 @@ def test_save_and_upcoming():
     conn = db.connect(":memory:")
     db.save(conn, [COURSE], [QUIZ], [BOOK])
     rows = db.upcoming(conn)
-    assert rows == [("CPSC 121", "deadline", "quiz", "Quiz 2", "2026-09-30T06:59:00", "https://x/q/1", None)]
+    assert rows == [("CPSC 121", "deadline", "quiz", "Quiz 2", "2026-09-30T06:59:00", "https://x/q/1", None, "canvas")]
     assert conn.execute("SELECT isbn FROM textbooks").fetchall() == [("123",)]
 
 
@@ -44,6 +44,26 @@ def test_upcoming_filters_by_category():
     assert [r[2] for r in db.upcoming(conn, category="material")] == ["reading"]
 
 
+def test_undated_holds_items_with_no_due_date_separately_from_upcoming():
+    conn = db.connect(":memory:")
+    announcement = Item(course="CPSC 121", category="task", kind="announcement", title="Welcome!",
+                         due=None, url="https://x/a/1", source="canvas")
+    db.save(conn, [COURSE], [QUIZ, announcement])
+    assert [r[3] for r in db.upcoming(conn)] == ["Quiz 2"]  # undated item never shows up here
+    assert [r[3] for r in db.undated(conn)] == ["Welcome!"]
+
+
+def test_undated_is_most_recently_saved_first():
+    conn = db.connect(":memory:")
+    first = Item(course="CPSC 121", category="task", kind="announcement", title="First",
+                 due=None, url="https://x/a/1", source="canvas")
+    second = Item(course="CPSC 121", category="task", kind="announcement", title="Second",
+                  due=None, url="https://x/a/2", source="canvas")
+    db.save(conn, [COURSE], [first])
+    db.save(conn, [COURSE], [second])  # a later, separate fetch - not re-saving `first`
+    assert [r[3] for r in db.undated(conn)] == ["Second", "First"]
+
+
 def test_courses_and_by_course_grouping():
     conn = db.connect(":memory:")
     essay = Item(course="ENGL 112", category="task", kind="assignment", title="Essay 1",
@@ -64,7 +84,7 @@ def test_canvas_long_code_joins_the_same_course_as_workday_short_code():
     db.save(conn, [workday_course], [canvas_item])
     assert [c[0] for c in db.courses(conn)] == ["CPSC 121"]  # one course, not two
     rows = db.upcoming(conn)
-    assert rows == [("CPSC 121", "task", "assignment", "PS3", "2026-09-28T00:00:00", "https://canvas/1", None)]
+    assert rows == [("CPSC 121", "task", "assignment", "PS3", "2026-09-28T00:00:00", "https://canvas/1", None, "canvas")]
 
 
 def test_item_with_unmatched_course_still_shows_up():

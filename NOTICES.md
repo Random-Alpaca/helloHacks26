@@ -12,6 +12,9 @@ The app self-hosts its fonts under `static/fonts/` (Streamlit) and `web/public/f
 - **Syne Mono**: code.
   Copyright 2017 The Syne Project Authors
   (https://gitlab.com/bonjour-monde/fonderie/syne-typeface)
+- **DM Sans** (variable font): body text in the Figma-derived `web/` UI.
+  Copyright 2014 The DM Sans Project Authors
+  (https://github.com/googlefonts/dm-fonts)
 
 - **Source:** OpenFont (https://openfont.org/)
 - **License text:** https://openfontlicense.org/

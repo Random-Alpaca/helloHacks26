@@ -8,7 +8,8 @@ classify_urgency() (hub/models.py) is the stand-in for the weight-based
 formula there until Item carries a real weight field.
 """
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 
 from hub.models import classify_urgency
 
@@ -17,7 +18,7 @@ _URGENCY_ORDER = ("overdue", "critical", "high", "medium", "low")
 
 def sort_items(rows, now=None):
     """Sort hub.db.upcoming() rows - (code, category, kind, title, due, url,
-    done) - most urgent first. Ties break by due date."""
+    done, source) - most urgent first. Ties break by due date."""
 
     def key(row):
         due = datetime.fromisoformat(row[4])
@@ -60,3 +61,35 @@ def dedupe(items):
         seen.add(key)
         result.append(item)
     return result
+
+
+_STOPWORDS = {"the", "a", "an", "of", "for", "to", "and", "on", "in", "at", "is", "-"}
+
+
+def suspected_duplicates(items, title_threshold=0.6, due_tolerance=timedelta(hours=12)):
+    """Cross-source pairs that look like the same task under a different name -
+    e.g. the same assessment posted to both PrairieLearn and Canvas. Flags,
+    doesn't merge: too risky to silently drop a real item on a fuzzy match, so
+    this returns (canvas_item, other_item) pairs for the UI to show as
+    "possible duplicate of ...", left for a human to resolve.
+
+    # ponytail: title_threshold/due_tolerance are guesses, not tuned on real
+    # Canvas/PrairieLearn data - adjust once we see actual cross-source pairs.
+    Not wired into db.save() or app.py yet - logic only until UI direction lands.
+    """
+    flagged = []
+    for a in items:
+        if a.source != "canvas":
+            continue
+        for b in items:
+            if b.source == "canvas" or a.due is None or b.due is None:
+                continue
+            if abs(a.due - b.due) > due_tolerance:
+                continue
+            if SequenceMatcher(None, a.title.lower(), b.title.lower()).ratio() < title_threshold:
+                continue
+            a_words = {w for w in re.findall(r"\w+", a.title.lower())} - _STOPWORDS
+            b_words = {w for w in re.findall(r"\w+", b.title.lower())} - _STOPWORDS
+            if a_words & b_words:
+                flagged.append((a, b))
+    return flagged

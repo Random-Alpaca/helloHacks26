@@ -164,9 +164,11 @@ def save(conn, courses=(), items=(), textbooks=()):
 def upcoming(conn, category=None):
     """Items with a due date, soonest first, joined to their course code.
     `category` filters to just "task"/"deadline"/"material" if given.
-    Row shape: (code, category, kind, title, due, url, done). `done` is
-    0/1/None as stored - build a Status ("overdue"/"soon"/...) from it and
-    `due` with hub.models.status_of, don't recompute the logic here.
+    Row shape: (code, category, kind, title, due, url, done, source). `done`
+    is 0/1/None as stored - build a Status ("overdue"/"soon"/...) from it and
+    `due` with hub.models.status_of, don't recompute the logic here. `source`
+    is appended last so existing positional access (row[6] for `done`, etc.)
+    stays valid.
 
     LEFT JOIN, not JOIN: an item whose course didn't resolve at save() time
     (e.g. Canvas connected before any course-giving source has run) must
@@ -174,10 +176,22 @@ def upcoming(conn, category=None):
     just showing an unknown course, and "always produce something useful,
     never refuse on partial data" is this repo's own stated rule."""
     q = ("SELECT COALESCE(courses.code, '(unknown course)'), items.category, items.kind, items.title, "
-         "items.due, items.url, items.done "
+         "items.due, items.url, items.done, items.source "
          "FROM items LEFT JOIN courses ON courses.id = items.course_id "
          "WHERE items.due IS NOT NULL" + (" AND items.category = ?" if category else "") +
          " ORDER BY items.due")
+    return conn.execute(q, (category,) if category else ()).fetchall()
+
+
+def undated(conn, category=None):
+    """Items with no due date - a running feed (announcements, and anything
+    else without a real deadline) kept separate from upcoming()'s ranked
+    list, since there's nothing to rank by. Most recently saved first. Same
+    row shape as upcoming(), `due` just always reads NULL here."""
+    q = ("SELECT courses.code, items.category, items.kind, items.title, items.due, items.url, items.done, items.source "
+         "FROM items JOIN courses ON courses.id = items.course_id "
+         "WHERE items.due IS NULL" + (" AND items.category = ?" if category else "") +
+         " ORDER BY items.id DESC")
     return conn.execute(q, (category,) if category else ()).fetchall()
 
 
