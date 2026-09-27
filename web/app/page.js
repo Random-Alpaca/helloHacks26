@@ -272,20 +272,23 @@ export default function App() {
 
   async function load(useSample) {
     try {
-      const [nextItems, nextAnnouncements, nextCourses] = await Promise.all([
-        fetchUpcoming(useSample),
-        fetchAnnouncements(useSample),
-        fetchCourses(useSample),
-      ]);
+      const [nextItems, nextCourses] = await Promise.all([fetchUpcoming(useSample), fetchCourses(useSample)]);
       setItems(nextItems);
-      setAnnouncements(nextAnnouncements);
       setFetchedCourses(nextCourses);
       setLoadError(null);
     } catch (e) {
       setItems([]);
-      setAnnouncements([]);
       setFetchedCourses([]);
       setLoadError(e.message);
+    }
+    // Announcements are a separate, best-effort feed (GET /api/announcements
+    // isn't on every backend yet - e.g. before #50 merges) - a missing or
+    // failing endpoint shouldn't take the rest of the dashboard down with it
+    // the way a failed items/courses fetch does.
+    try {
+      setAnnouncements(await fetchAnnouncements(useSample));
+    } catch {
+      setAnnouncements([]);
     }
   }
 
