@@ -252,7 +252,31 @@ class Handler(BaseHTTPRequestHandler):
         # hub/webwork.py's fetch() returns items only (no catalogue join key
         # on its own page) - build the Course record here ourselves, same as
         # its own __main__ block does.
-        self._connect(lambda: ([Course(code=course_code, section="", term="", title=course_code)], webwork.fetch(base, course_code)))
+        #
+        # Not routed through self._connect(): course_code is matched against
+        # existing courses (db.find_matching_course) *before* saving, since
+        # a real bug found live showed a plain save() alone isn't enough -
+        # _course_id() always re-canonicalizes course_code, so even reusing
+        # a match's own (code, term) through the normal save() path just
+        # creates a second canonical-form row instead of finding a stale,
+        # pre-canonicalization one (a real "BMEG 230" left a stale
+        # "BMEG_V 230 101 2026W1" row untouched). db.merge_course_into(),
+        # run right after save(), is what actually folds the two together -
+        # self._connect()'s fixed save-then-respond shape has nowhere to
+        # fit that extra step in.
+        conn = db.connect()
+        matched = db.find_matching_course(conn, course_code)
+        try:
+            items = webwork.fetch(base, course_code)
+        except Exception as e:  # ponytail: same broad catch as _connect() - a bad/expired/
+            # slow scrape shouldn't take the server down.
+            return self._json({"ok": False, "error": str(e)}, status=502)
+        courses = [Course(code=course_code, section="", term="", title=course_code)]
+        db.save(conn, courses, items)
+        if matched:
+            _matched_id, _matched_code, _matched_term = matched
+            db.merge_course_into(conn, course_code, "", target_id=_matched_id)
+        self._json({"ok": True, "courses": len(courses), "items": len(items)})
 
     def _connect(self, fetch_fn):
         """Opens a browser window for the student to sign in themselves

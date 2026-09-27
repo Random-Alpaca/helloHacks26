@@ -275,3 +275,33 @@ def test_connect_webwork_builds_the_course_itself_from_course_code(tmp_path, mon
         assert body == {"ok": True, "courses": 1, "items": 1}
     finally:
         server.shutdown()
+
+
+def test_connect_webwork_joins_an_existing_course_instead_of_making_a_new_one(tmp_path, monkeypatch):
+    # Real bug found live: a pre-existing Canvas course row stored as
+    # "BMEG_V 230 101 2026W1" (predates canonical course codes) didn't join
+    # with a fresh "BMEG 230" WeBWorK course, even though both name the
+    # same real course - two separate cards, WeBWorK's items invisible on
+    # the real one. _connect_webwork should find and reuse the existing
+    # course's own stored identity instead of making a new "BMEG 230" row.
+    db_path = tmp_path / "hub.db"
+    conn = db.connect(db_path)
+    conn.execute("INSERT INTO courses (code, term, title) VALUES ('BMEG_V 230 101 2026W1', '2026W1_V', 'Biomechanics I')")
+    conn.commit()
+    fake_item = Item(course="BMEG 230", category="task", kind="problemset", title="WW1",
+                      due=None, url="https://webwork.elearning.ubc.ca/1", source="webwork")
+    monkeypatch.setattr(webwork, "fetch", lambda base, course_code: [fake_item])
+    server = _running_server(tmp_path, monkeypatch)
+    try:
+        port = server.server_address[1]
+        status, body = _post_json(port, "/api/connect/webwork", {"base": "https://webwork.elearning.ubc.ca", "course_code": "BMEG 230"})
+        assert status == 200
+        assert body == {"ok": True, "courses": 1, "items": 1}
+        rows = conn.execute("SELECT code FROM courses").fetchall()
+        assert rows == [("BMEG_V 230 101 2026W1",)]  # one course, not two
+        item_course = conn.execute(
+            "SELECT courses.code FROM items JOIN courses ON courses.id = items.course_id WHERE items.source='webwork'"
+        ).fetchone()
+        assert item_course == ("BMEG_V 230 101 2026W1",)
+    finally:
+        server.shutdown()
