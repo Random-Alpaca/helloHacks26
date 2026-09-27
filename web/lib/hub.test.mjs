@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hideCourseItems, mergeItems, mergeMeetings, monthGrid, parsePreferredKinds, selectConnections, selectItemsDueOn, selectMeetingsOn, selectVisibleCourses, sortItems } from "./hub.js";
+import { hideCourseItems, mergeItems, mergeMeetings, monthGrid, parsePreferredKinds, selectConnections, selectDaySchedule, selectItemsDueOn, selectMeetingsOn, selectVisibleCourses, sortItems } from "./hub.js";
 
 test("selectConnections: no data means nothing is connected", () => {
   const connections = selectConnections([], []);
@@ -24,11 +24,15 @@ test("selectConnections: source-tagged items mark that provider connected, other
   assert.equal(byId.workday.connected, false);
 });
 
-test("selectConnections: imported Workday courses count as connected regardless of items", () => {
-  const connections = selectConnections([], [{ code: "BMEG 201" }]);
+test("selectConnections: loaded Workday meetings count as connected regardless of items", () => {
+  // Workday feeds the Schedule tab only, never the course list (no
+  // assignment data ever comes from it) - "connected" tracks meetings, not
+  // courses.
+  const meetings = [{ course: "BMEG 201", kind: "lecture", days: ["MO"], startTime: "10:00" }];
+  const connections = selectConnections([], meetings);
   const workday = connections.find((c) => c.id === "workday");
   assert.equal(workday.connected, true);
-  assert.equal(workday.detail, "1 course imported");
+  assert.equal(workday.detail, "1 class meeting");
 });
 
 test("selectConnections: an unrecognized source shows up as its own custom PrairieLearn row", () => {
@@ -120,6 +124,27 @@ test("selectMeetingsOn: excludes a matching weekday outside the meeting's term r
   const afterTerm = new Date(2026, 11, 14); // a Monday, but after termEnd
   assert.deepEqual(selectMeetingsOn(meetings, beforeTerm), []);
   assert.deepEqual(selectMeetingsOn(meetings, afterTerm), []);
+});
+
+test("selectDaySchedule: weaves that day's classes and due items into one chronological list", () => {
+  const monday = new Date(2026, 8, 14); // a Monday within term
+  const meetings = [
+    { course: "CPSC 121", kind: "lecture", days: ["MO"], startTime: "10:00", endTime: "11:00", termStart: "2026-09-08", termEnd: "2026-12-05" },
+  ];
+  const items = [
+    { id: 1, title: "Problem Set 3", kind: "assignment", course: "CPSC 121", due: new Date(2026, 8, 14, 23, 59).toISOString(), urgency: "medium" },
+    { id: 2, title: "Reading response", kind: "reading", course: "ENGL 110", due: new Date(2026, 8, 14, 8, 30).toISOString(), urgency: "low" },
+    { id: 3, title: "Not this day", kind: "quiz", course: "MATH 100", due: new Date(2026, 8, 15, 8, 0).toISOString(), urgency: "low" },
+  ];
+  const schedule = selectDaySchedule(items, meetings, monday);
+  // 08:30 reading, 10:00 lecture, 23:59 assignment - due items interleaved
+  // with the class by actual time, not bucketed separately; the 15th's item
+  // (a different day) is excluded.
+  assert.deepEqual(
+    schedule.map((e) => (e.kind === "meeting" ? e.meeting.course : e.item.title)),
+    ["Reading response", "CPSC 121", "Problem Set 3"],
+  );
+  assert.deepEqual(schedule.map((e) => e.kind), ["item", "meeting", "item"]);
 });
 
 test("parsePreferredKinds: empty/missing cookie value means nothing preferred", () => {

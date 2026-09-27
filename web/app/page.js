@@ -17,7 +17,6 @@ import {
   isDone,
   isLocalMode,
   isOverdue,
-  mergeCourses,
   mergeItems,
   mergeMeetings,
   monthGrid,
@@ -27,14 +26,14 @@ import {
   selectConnections,
   selectCourseItems,
   selectItemsDueOn,
-  selectMeetingsOn,
+  selectDaySchedule,
   selectNextUp,
   selectVisibleCourses,
   selectVisibleItems,
   weekDates,
   writePreferredKindsCookie,
 } from "../lib/hub";
-import { parseWorkdayCourses, parseWorkdaySchedule } from "../lib/workday";
+import { parseWorkdaySchedule } from "../lib/workday";
 
 function Icon({ name, className = "size-5" }) {
   const paths = {
@@ -139,7 +138,7 @@ function CalendarSection({ items, meetings, now }) {
   const [selectedDate, setSelectedDate] = useState(null);
 
   const weeks = useMemo(() => monthGrid(monthDate), [monthDate]);
-  const daySchedule = useMemo(() => (selectedDate ? selectMeetingsOn(meetings, selectedDate) : []), [meetings, selectedDate]);
+  const daySchedule = useMemo(() => (selectedDate ? selectDaySchedule(items, meetings, selectedDate) : []), [items, meetings, selectedDate]);
 
   function shiftMonth(delta) {
     setMonthDate((d) => new Date(d.getFullYear(), d.getMonth() + delta, 1));
@@ -213,15 +212,23 @@ function CalendarSection({ items, meetings, now }) {
             </div>
             <div className="space-y-2">
               {daySchedule.length === 0 ? (
-                <div className="text-xs text-[var(--muted)]">No classes scheduled - import your Workday &quot;Current Schedule&quot; export in Settings.</div>
+                <div className="text-xs text-[var(--muted)]">Nothing scheduled or due this day.</div>
               ) : (
-                daySchedule.map((m, idx) => (
-                  <div key={idx} className="rounded-lg border border-[var(--line)] bg-[var(--surface)] p-2.5">
-                    <div className="truncate text-xs font-bold">{m.course}</div>
-                    <div className="mt-0.5 text-[0.7rem] text-[var(--muted)]">{m.kind} &middot; {m.startTime}&ndash;{m.endTime}</div>
-                    {m.location && <div className="truncate text-[0.7rem] text-[var(--muted)]">{m.location}</div>}
-                  </div>
-                ))
+                daySchedule.map((entry, idx) =>
+                  entry.kind === "meeting" ? (
+                    <div key={idx} className="rounded-lg border border-[var(--line)] bg-[var(--surface)] p-2.5">
+                      <div className="truncate text-xs font-bold">{entry.meeting.course}</div>
+                      <div className="mt-0.5 text-[0.7rem] text-[var(--muted)]">{entry.meeting.kind} &middot; {entry.meeting.startTime}&ndash;{entry.meeting.endTime}</div>
+                      {entry.meeting.location && <div className="truncate text-[0.7rem] text-[var(--muted)]">{entry.meeting.location}</div>}
+                    </div>
+                  ) : (
+                    <a key={idx} href={entry.item.url} className="block rounded-lg border border-[var(--line)] bg-[var(--surface)] p-2.5">
+                      <div className="truncate text-xs font-bold">{entry.item.title}</div>
+                      <div className="mt-0.5 text-[0.7rem] text-[var(--muted)]">{entry.item.kind} &middot; due {entry.time}</div>
+                      <div className="truncate text-[0.7rem] text-[var(--muted)]">{entry.item.course}</div>
+                    </a>
+                  ),
+                )
               )}
             </div>
           </div>
@@ -231,7 +238,7 @@ function CalendarSection({ items, meetings, now }) {
   );
 }
 
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind }) {
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
   const [customDomain, setCustomDomain] = useState("");
@@ -257,19 +264,17 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
     }
     try {
       const buf = await file.arrayBuffer();
-      const imported = parseWorkdayCourses(buf, term);
-      onWorkdayImported(imported);
-      // Same file, same row, a column parseWorkdayCourses doesn't read
-      // (#85) - a schedule-less export (an older shape, or a school whose
-      // Workday config omits it) still imports its courses fine; this just
-      // adds nothing to the Schedule tab rather than failing the import.
+      // Workday feeds the Schedule tab only, not the course list - Canvas/
+      // PrairieLearn are the only sources with real assignment data, and a
+      // Workday-only course (no items ever attached to it) showing up in
+      // the sidebar/Courses tab would be misleading, not useful.
       const scheduleImported = parseWorkdaySchedule(buf, term);
       onScheduleImported(scheduleImported);
-      // Two sentences, not one interpolated string: keeps "Imported N
-      // courses." an exact, stable substring (web/e2e's oracle matches on
-      // it) regardless of whether a schedule came along too.
-      const scheduleNote = scheduleImported.length > 0 ? ` Loaded ${scheduleImported.length} class meeting${scheduleImported.length === 1 ? "" : "s"}.` : "";
-      setWorkdayStatus(`Imported ${imported.length} course${imported.length === 1 ? "" : "s"}.${scheduleNote}`);
+      setWorkdayStatus(
+        scheduleImported.length > 0
+          ? `Loaded ${scheduleImported.length} class meeting${scheduleImported.length === 1 ? "" : "s"}.`
+          : "No class meetings found in that file.",
+      );
     } catch (err) {
       setWorkdayStatus(null);
       setError(err.message);
@@ -500,7 +505,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
               <span className={`size-2.5 rounded-full ${byId.workday.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
               <div>
                 <div className="font-bold">Workday</div>
-                <div className="text-xs text-[var(--muted)]">{byId.workday.connected ? "Imported" : "Not imported"} &middot; {byId.workday.detail}</div>
+                <div className="text-xs text-[var(--muted)]">{byId.workday.connected ? "Loaded" : "Not loaded"} &middot; {byId.workday.detail}</div>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -580,7 +585,6 @@ export default function App() {
   const [items, setItems] = useState([]);
   const [announcements, setAnnouncements] = useState([]);
   const [fetchedCourses, setFetchedCourses] = useState([]);
-  const [importedCourses, setImportedCourses] = useState([]);
   const [meetings, setMeetings] = useState([]);
   const [loadError, setLoadError] = useState(null);
   const [hiddenCourses, setHiddenCourses] = useState([]);
@@ -712,10 +716,6 @@ export default function App() {
     }
   }
 
-  function importWorkdayCourses(imported) {
-    setImportedCourses((prev) => mergeCourses(prev, imported));
-  }
-
   function importWorkdaySchedule(imported) {
     setMeetings((prev) => mergeMeetings(prev, imported));
   }
@@ -726,7 +726,7 @@ export default function App() {
   }, [sampleMode]);
 
   const now = new Date();
-  const allCourses = mergeCourses(fetchedCourses, importedCourses);
+  const allCourses = fetchedCourses;
   const courses = selectVisibleCourses(allCourses, hiddenCourses);
   const allItems = mergeItems(items, feedItems);
   const activeItems = hideCourseItems(selectActiveItems(allItems), hiddenCourses);
@@ -760,7 +760,7 @@ export default function App() {
   const topAssignments = selectVisibleItems(activeItems, { tab: "all", hideOverdue: false, showN: 5, now, preferredKinds });
   const nextUp = selectNextUp(activeItems, preferredKinds);
   const days = weekDates(now);
-  const connections = selectConnections(allItems, importedCourses);
+  const connections = selectConnections(allItems, meetings);
 
   const customStyle = theme === "custom"
     ? { "--page": customColors.page, "--surface": customColors.surface, "--ink": customColors.ink, "--accent": customColors.accent }
@@ -837,7 +837,6 @@ export default function App() {
               sampleMode={sampleMode}
               onSampleModeChange={setSampleMode}
               onConnected={() => load(false)}
-              onWorkdayImported={importWorkdayCourses}
               onScheduleImported={importWorkdaySchedule}
               allCourses={allCourses}
               hiddenCourses={hiddenCourses}
