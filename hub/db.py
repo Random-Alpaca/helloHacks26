@@ -120,6 +120,18 @@ def upcoming(conn, category=None):
     return conn.execute(q, (category,) if category else ()).fetchall()
 
 
+def undated(conn, category=None):
+    """Items with no due date - a running feed (announcements, and anything
+    else without a real deadline) kept separate from upcoming()'s ranked
+    list, since there's nothing to rank by. Most recently saved first. Same
+    row shape as upcoming(), `due` just always reads NULL here."""
+    q = ("SELECT courses.code, items.category, items.kind, items.title, items.due, items.url, items.done, items.source "
+         "FROM items JOIN courses ON courses.id = items.course_id "
+         "WHERE items.due IS NULL" + (" AND items.category = ?" if category else "") +
+         " ORDER BY items.id DESC")
+    return conn.execute(q, (category,) if category else ()).fetchall()
+
+
 def courses(conn):
     """Every course, e.g. for a Courses / Course-card screen."""
     return conn.execute("SELECT code, term, title, grade FROM courses ORDER BY code").fetchall()
