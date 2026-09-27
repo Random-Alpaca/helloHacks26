@@ -11,8 +11,13 @@ import {
   displayLabel,
   fetchAnnouncements,
   fetchUndatedTasks,
-  fetchCanvasFeed,
+  fetchDemoMeetings,
+  connectCanvasFeed as postCanvasFeed,
+  refreshCanvasFeed,
+  disconnectCanvasFeed as deleteCanvasFeed,
+  migrateLegacyFeedUrl,
   fetchCourses,
+  fetchHostedStore,
   fetchUpcoming,
   formatDue,
   hasItemDueOn,
@@ -21,10 +26,12 @@ import {
   isLocalMode,
   isOverdue,
   itemKey,
+  mergeCourses,
   mergeItems,
   mergeMeetings,
   monthGrid,
   PREFERRED_KIND_OPTIONS,
+  pushToHostedStore,
   readPreferredKindsCookie,
   selectActiveItems,
   selectConnections,
@@ -35,6 +42,8 @@ import {
   selectNextUp,
   selectVisibleCourses,
   selectVisibleItems,
+  startHostedSession,
+  syncKeyFromHash,
   weekDates,
   writePreferredKindsCookie,
 } from "../lib/hub";
@@ -263,7 +272,18 @@ function CalendarSection({ items, meetings, now, onToggleItemDone }) {
   );
 }
 
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind, brightspaceCourseCount, onBrightspaceConnected, webworkConnections, onWebworkConnected }) {
+const SOURCE_LABELS = {
+  canvas: "Canvas",
+  canvas_feed: "Canvas calendar feed",
+  prairielearn: "PrairieLearn",
+  prairielearn_ok: "PrairieLearn (Okanagan)",
+  prairielearn_custom: "PrairieLearn",
+  hosted: "Hub sync key",
+  "sync-all": "Sync everywhere",
+  push: "Push to hosted",
+};
+
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, feedConnected, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind, onConnectHosted, onSynced, hostedConnected, allItems, allCoursesForPush, brightspaceCourseCount, onBrightspaceConnected, webworkConnections, onWebworkConnected }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
   const [customDomain, setCustomDomain] = useState("");
@@ -271,11 +291,51 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
   const [brightspaceUrl, setBrightspaceUrl] = useState("");
   const [webworkUrl, setWebworkUrl] = useState("");
   const [webworkCourseCode, setWebworkCourseCode] = useState("");
+  const [hostedKeyInput, setHostedKeyInput] = useState("");
+  const [extensionId, setExtensionId] = useState("");
+  const [syncResults, setSyncResults] = useState(null);
+  const [pushBase, setPushBase] = useState("https://hello-hacks26-one.vercel.app");
+  const [pushKeyInput, setPushKeyInput] = useState("");
+  const [pushStatus, setPushStatus] = useState(null);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
   const byId = Object.fromEntries(connections.map((c) => [c.id, c]));
   const FIXED_IDS = new Set(["canvas", "prairielearn", "prairielearn_ok", "webwork", "workday"]);
   const customConnections = connections.filter((c) => !FIXED_IDS.has(c.id));
+
+  useEffect(() => {
+    setExtensionId(localStorage.getItem("hub-extension-id") || "");
+  }, []);
+
+  async function syncEverywhere() {
+    const id = extensionId.trim();
+    if (!/^[a-p]{32}$/.test(id)) throw new Error("Paste the extension ID from chrome://extensions first.");
+    localStorage.setItem("hub-extension-id", id);
+    if (!globalThis.chrome?.runtime?.sendMessage) {
+      throw new Error("Extension unreachable. Load extension/ unpacked in Chrome and paste its ID from chrome://extensions.");
+    }
+    setSyncResults(null);
+    // Unpacked installs have different IDs; save this browser's ID instead of guessing one.
+    const progressTimer = setInterval(() => {
+      chrome.runtime.sendMessage(id, {type: "SYNC_STATUS"}, (response) => {
+        if (!chrome.runtime.lastError && response?.results?.length) setSyncResults(response.results);
+      });
+    }, 500);
+    let reply;
+    try {
+      reply = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(id, {type: "SYNC_ALL"}, (response) => {
+          if (chrome.runtime.lastError) reject(new Error("Extension unreachable. Load extension/ unpacked in Chrome and check its ID."));
+          else resolve(response);
+        });
+      });
+    } finally {
+      clearInterval(progressTimer);
+    }
+    if (!reply?.ok) throw new Error(reply?.error || "Extension did not respond.");
+    setSyncResults(reply.results);
+    if (reply.results.some((result) => result.ok)) await onSynced();
+  }
 
   async function handleFile(e) {
     const file = e.target.files[0];
@@ -316,7 +376,8 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
       await fn();
       await onConnected();
     } catch (e) {
-      setError(`${name}: ${e.message}`);
+      // A person reads this - a human label, never an internal source id.
+      setError(`${SOURCE_LABELS[name] ?? "Connect"}: ${e.message}`);
     } finally {
       setBusy(null);
     }
@@ -387,13 +448,68 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
         <div className="mb-5 text-sm text-[var(--muted)]">
           {isLocalMode()
             ? "What's actually feeding your dashboard right now."
-            : "This is the hosted demo, so Canvas and PrairieLearn can't connect here - run Hub locally to link a real account (see the README)."}
+            : "This is the hosted demo: Sample data is a made-up demo student, run through Hub's real adapters. Connect your hosted data with a sync key, then refresh signed-in providers through the browser extension."}
         </div>
 
         <label className="toggle-pill mb-5 flex w-full items-center justify-between">
           <span>Sample data</span>
           <input type="checkbox" checked={sampleMode} onChange={(e) => onSampleModeChange(e.target.checked)} />
         </label>
+
+        {!isLocalMode() && (
+          <div className="mb-5 rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4">
+            {hostedConnected ? (
+              <div className="text-sm font-bold text-[var(--success)]">Lauds connected - showing your synced data.</div>
+            ) : (
+              <>
+                <div className="mb-2 text-sm font-bold">Paste your Lauds sync key</div>
+                <div className="mb-3 text-xs text-[var(--muted)]">
+                  Open the Lauds browser extension&apos;s popup and copy its &quot;Lauds sync key&quot; field.
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={hostedKeyInput}
+                    onChange={(e) => setHostedKeyInput(e.target.value)}
+                    placeholder="Sync key from the extension"
+                    aria-label="Lauds sync key"
+                    className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 py-1 text-xs"
+                  />
+                  <AppButton
+                    disabled={busy !== null || !hostedKeyInput}
+                    onClick={() => run("hosted", async () => {
+                      const hasData = await onConnectHosted(hostedKeyInput.trim());
+                      setHostedKeyInput("");
+                      if (!hasData) setError("Connected, but no data has synced from the extension yet.");
+                    })}
+                    className="toggle-pill"
+                  >
+                    {busy === "hosted" ? "Connecting…" : "Connect"}
+                  </AppButton>
+                </div>
+              </>
+            )}
+            <div className="mt-4 border-t border-[var(--line)] pt-4">
+              <div className="mb-2 text-sm font-bold">Sync everywhere now</div>
+              <div className="mb-3 text-xs text-[var(--muted)]">Load extension/ unpacked in Chrome, then paste its ID from chrome://extensions. Keep each connected provider signed in and open.</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input type="text" value={extensionId} onChange={(e) => setExtensionId(e.target.value)}
+                  placeholder="Extension ID" aria-label="Extension ID"
+                  className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 py-1 text-xs" />
+                <AppButton disabled={busy !== null} onClick={() => run("sync-all", syncEverywhere)} className="toggle-pill">
+                  Sync everywhere now
+                </AppButton>
+              </div>
+              {busy === "sync-all" && <div className="mt-2 text-xs text-[var(--muted)]">Extension is syncing connected providers in sequence…</div>}
+              {syncResults && <div className="mt-2 text-xs" aria-live="polite">
+                {syncResults.length === 0 ? "No providers have synced through this extension yet. Connect one in its popup first." :
+                  syncResults.map((result) => <div key={result.provider}>
+                    {result.label}: {result.state === "pending" ? "Waiting" : result.state === "running" ? "Syncing" : result.ok || result.state === "done" && !result.error ? "Uploaded" : result.error}
+                  </div>)}
+              </div>}
+            </div>
+          </div>
+        )}
 
         <div className="divide-y divide-[var(--line)]">
           <div className="flex flex-wrap items-center justify-between gap-3 py-3">
@@ -413,7 +529,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
 
           {!sampleMode && (
             <div className="py-3">
-              {canvasFeedUrl ? (
+              {feedConnected ? (
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4">
                   <div>
                     <div className="text-sm font-bold">Calendar feed connected</div>
@@ -442,7 +558,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
                     />
                     <AppButton
                       disabled={busy !== null || !feedUrlInput}
-                      onClick={() => run("canvas_feed", () => onConnectFeed(feedUrlInput))}
+                      onClick={() => run("canvas_feed", async () => { await onConnectFeed(feedUrlInput); setFeedUrlInput(""); })}
                       className="toggle-pill"
                     >
                       {busy === "canvas_feed" ? "Connecting…" : "Connect"}
@@ -663,6 +779,66 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
       </section>
 
       <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
+        <div className="mb-1 text-xl font-bold tracking-tight">Advanced: real Canvas / PrairieLearn login</div>
+        <div className="mb-5 text-sm text-[var(--muted)]">
+          This uses Playwright to open a real browser window on <strong className="text-[var(--ink)]">your own machine</strong> so you log in yourself - no website, including this one, can install software or open a browser for you. That has to run from a terminal.
+        </div>
+        <div className="mb-4 rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4">
+          <div className="mb-2 text-xs font-bold text-[var(--muted)]">
+            {isLocalMode() ? "✓ Detected: this page is running locally right now." : "One-liner, in a terminal (needs Homebrew's uv, nothing else - no repo clone):"}
+          </div>
+          {!isLocalMode() && (
+            <>
+              <pre className="overflow-x-auto rounded-md bg-[var(--surface)] p-3 text-[0.7rem] leading-relaxed">
+{`curl -fsSL https://raw.githubusercontent.com/terraceonhigh/helloHacks26/main/tools/sync.sh | bash`}
+              </pre>
+              <div className="mt-2 text-[0.7rem] text-[var(--muted)]">
+                Opens a browser window per provider for you to log into, scans Canvas and PrairieLearn, then prints a sync key - paste that into "Paste your hub sync key" above to see it here, same as the extension.
+              </div>
+            </>
+          )}
+        </div>
+        {isLocalMode() && (
+          <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4">
+            <div className="mb-2 text-sm font-bold">Push what you just logged into onto your hosted dashboard</div>
+            <div className="mb-3 text-xs text-[var(--muted)]">
+              Connect Canvas/PrairieLearn above first, then send those real items to your hosted hub (the same sync key the extension popup shows) so they show up everywhere, not just here.
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="url"
+                value={pushBase}
+                onChange={(e) => setPushBase(e.target.value)}
+                placeholder="https://your-hub.vercel.app"
+                aria-label="Hosted hub URL"
+                className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 py-1 text-xs"
+              />
+              <input
+                type="text"
+                value={pushKeyInput}
+                onChange={(e) => setPushKeyInput(e.target.value)}
+                placeholder="Sync key from the extension"
+                aria-label="Sync key to push with"
+                className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 py-1 text-xs"
+              />
+              <AppButton
+                disabled={busy !== null || !pushKeyInput || !pushBase || allItems.length === 0}
+                onClick={() => run("push", async () => {
+                  const stored = await pushToHostedStore(pushBase.replace(/\/$/, ""), pushKeyInput.trim(), allItems, allCoursesForPush);
+                  setPushStatus(`Pushed ${stored} item${stored === 1 ? "" : "s"}.`);
+                })}
+                className="toggle-pill"
+              >
+                {busy === "push" ? "Pushing…" : "Push now"}
+              </AppButton>
+            </div>
+            {allItems.length === 0 && <div className="mt-2 text-[0.7rem] text-[var(--muted)]">Nothing real loaded yet - connect Canvas or PrairieLearn above first.</div>}
+            {pushStatus && <div className="mt-2 text-[0.7rem] text-[var(--muted)]">{pushStatus}</div>}
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
         <div className="mb-1 text-xl font-bold tracking-tight">Courses</div>
         <div className="mb-5 text-sm text-[var(--muted)]">
           Hide old or inactive courses a provider still lists (Canvas, especially, likes to keep listing ones you're not really in this term) - a hidden course disappears everywhere, not just here.
@@ -712,6 +888,7 @@ export default function App() {
   const [undatedTasks, setUndatedTasks] = useState([]);
   const [fetchedCourses, setFetchedCourses] = useState([]);
   const [meetings, setMeetings] = useState([]);
+  const [demoMeetings, setDemoMeetings] = useState([]);
   const [loadError, setLoadError] = useState(null);
   const [hiddenCourses, setHiddenCourses] = useState([]);
   const [manuallyDoneKeys, setManuallyDoneKeys] = useState([]);
@@ -721,7 +898,7 @@ export default function App() {
   // state used to live inside SettingsPage itself, which meant it reset to
   // "not connected" the moment you navigated away and back, even though
   // the real connection was still there in hub.db - persisted like every
-  // other Connections-tab fact for the same reason canvasFeedUrl is.
+  // other Connections-tab fact.
   const [brightspaceCourseCount, setBrightspaceCourseCount] = useState(null);
   // A list, not one value - more than one course can run its own WeBWorK
   // (issue raised live: a student's real account had WeBWorK for exactly
@@ -730,9 +907,11 @@ export default function App() {
   // keyed by courseCode so reconnecting the same course updates it in
   // place instead of appending a duplicate.
   const [webworkConnections, setWebworkConnections] = useState([]);
-  const [canvasFeedUrl, setCanvasFeedUrl] = useState("");
+  const [feedConnected, setFeedConnected] = useState(false);
   const [feedItems, setFeedItems] = useState([]);
   const [feedError, setFeedError] = useState(null);
+  const [storeItems, setStoreItems] = useState([]);
+  const [storeCourses, setStoreCourses] = useState([]);
   const loadRequestId = useRef(0);
   const feedRequestId = useRef(0);
 
@@ -774,23 +953,37 @@ export default function App() {
       // ignore malformed/missing storage - keep the default (no connections yet)
     }
     setPreferredKinds(readPreferredKindsCookie());
-    // The feed URL is a secret (works like a password) - localStorage only,
-    // never sent anywhere but /api/feed. Re-fetches automatically on every
-    // load so a saved connection keeps working without re-pasting the link.
-    const savedFeedUrl = localStorage.getItem("gather-canvas-feed-url");
-    if (savedFeedUrl) {
-      setCanvasFeedUrl(savedFeedUrl);
-      const requestId = ++feedRequestId.current;
-      fetchCanvasFeed(savedFeedUrl)
-        .then((nextFeedItems) => {
-          if (requestId !== feedRequestId.current) return; // superseded by a connect/disconnect since
-          setFeedItems(nextFeedItems);
-        })
-        .catch(() => {
-          if (requestId !== feedRequestId.current) return;
-          // Generic message only - a server error must never put the feed URL (a secret) on screen.
-          setFeedError("Couldn't refresh your feed - it may have expired or changed.");
-        });
+    // The feed URL is a secret (works like a password): it lives only in an
+    // httpOnly cookie the page can't read (see hub/ics.py's feed_request()).
+    // An older build kept it in localStorage - migrate that once, deleting
+    // it whatever happens, then refresh from the cookie on every load so a
+    // saved connection keeps working without re-pasting the link.
+    const requestId = ++feedRequestId.current;
+    migrateLegacyFeedUrl(window.localStorage)
+      .then(() => refreshCanvasFeed())
+      .then((nextFeedItems) => {
+        if (requestId !== feedRequestId.current) return; // superseded by a connect/disconnect since
+        setFeedConnected(nextFeedItems !== null);
+        setFeedItems(nextFeedItems ?? []);
+      })
+      .catch(() => {
+        if (requestId !== feedRequestId.current) return;
+        // Generic message only - a server error must never put the feed URL (a secret) on screen.
+        setFeedConnected(true);
+        setFeedError("Couldn't refresh your feed - it may have expired or changed.");
+      });
+    // Hosted store: a #sync=<key> link from the extension becomes an
+    // httpOnly cookie, and the fragment is dropped from the address bar
+    // before anything else happens. Any failure (503 until the store is
+    // provisioned, 401 with no session) silently leaves the dashboard as is.
+    if (!isLocalMode()) {
+      const syncKey = syncKeyFromHash(window.location.hash);
+      if (syncKey) {
+        history.replaceState(null, "", window.location.pathname + window.location.search);
+        connectHostedStore(syncKey).catch(() => {});
+      } else {
+        fetchHostedStore().then(applyHostedStore).catch(() => {});
+      }
     }
   }, []);
 
@@ -845,24 +1038,23 @@ export default function App() {
     const requestId = ++feedRequestId.current;
     let nextFeedItems;
     try {
-      nextFeedItems = await fetchCanvasFeed(url);
+      nextFeedItems = await postCanvasFeed(url);
     } catch {
       // Generic message only - a server error must never put the feed URL (a secret) on screen.
       throw new Error("Couldn't load that feed - double check the link and try again.");
     }
     if (requestId !== feedRequestId.current) return; // superseded by a disconnect/another connect since
-    setCanvasFeedUrl(url);
+    setFeedConnected(true); // the URL itself is now only in the httpOnly cookie
     setFeedItems(nextFeedItems);
     setFeedError(null);
-    localStorage.setItem("gather-canvas-feed-url", url);
   }
 
   function disconnectCanvasFeed() {
     feedRequestId.current++; // invalidate any in-flight fetch, so it can't overwrite this afterward
-    setCanvasFeedUrl("");
+    setFeedConnected(false);
     setFeedItems([]);
     setFeedError(null);
-    localStorage.removeItem("gather-canvas-feed-url");
+    deleteCanvasFeed(); // the server clears the cookie
   }
 
   async function load(useSample) {
@@ -901,10 +1093,32 @@ export default function App() {
     } catch {
       setUndatedTasks([]);
     }
+    // The demo student's class meetings (hosted Sample mode; [] otherwise).
+    // Kept apart from `meetings` (the student's own Workday import) so they
+    // never count as a real connection and vanish when Sample goes off.
+    const nextDemoMeetings = await fetchDemoMeetings(useSample);
+    if (requestId === loadRequestId.current) setDemoMeetings(nextDemoMeetings);
   }
 
   function importWorkdaySchedule(imported) {
     setMeetings((prev) => mergeMeetings(prev, imported));
+  }
+
+  function applyHostedStore(store) {
+    if (!store) return false;
+    setStoreItems(store.items);
+    setStoreCourses(store.courses);
+    // A real sync means there's real data to show - don't make the student
+    // also find and flip the Sample data toggle themselves.
+    const hasData = store.items.length > 0 || store.courses.length > 0;
+    if (hasData) setSampleMode(false);
+    return hasData;
+  }
+
+  async function connectHostedStore(key) {
+    const ok = await startHostedSession(key);
+    if (!ok) throw new Error("That sync key wasn't accepted.");
+    return applyHostedStore(await fetchHostedStore());
   }
 
   useEffect(() => {
@@ -913,9 +1127,9 @@ export default function App() {
   }, [sampleMode]);
 
   const now = new Date();
-  const allCourses = fetchedCourses;
+  const allCourses = mergeCourses(fetchedCourses, storeCourses);
   const courses = selectVisibleCourses(allCourses, hiddenCourses);
-  const allItems = mergeItems(mergeItems(items, feedItems), undatedTasks);
+  const allItems = mergeItems(mergeItems(mergeItems(items, storeItems), feedItems), undatedTasks);
   const activeItems = hideCourseItems(selectActiveItems(allItems, manuallyDoneKeys), hiddenCourses);
   const doneCount = hideCourseItems(allItems, hiddenCourses).filter((item) => isDone(item, manuallyDoneKeys)).length;
   const overdueCount = activeItems.filter((item) => isOverdue(item, now)).length;
@@ -947,7 +1161,13 @@ export default function App() {
   const topAssignments = selectVisibleItems(activeItems, { tab: "all", hideOverdue: false, showN: 5, now, preferredKinds });
   const nextUp = selectNextUp(activeItems, preferredKinds);
   const days = weekDates(now);
-  const connections = selectConnections(allItems, meetings);
+  // Sample/demo rows now carry a real `source` (the hosted demo runs the real
+  // adapters over a fake student), but nothing is actually connected - so
+  // outside local live mode only the hosted store's and the feed's items
+  // count toward Settings' Connections, never the sample/demo `items`.
+  const connectedItems = isLocalMode() && !sampleMode ? allItems : mergeItems(storeItems, feedItems);
+  const connections = selectConnections(connectedItems, meetings);
+  const shownMeetings = mergeMeetings(demoMeetings, meetings);
 
   const customStyle = theme === "custom"
     ? { "--page": customColors.page, "--surface": customColors.surface, "--ink": customColors.ink, "--accent": customColors.accent }
@@ -994,9 +1214,10 @@ export default function App() {
             <AppButton
               ariaLabel="Settings"
               onClick={() => { setActiveNav("Settings"); setMobileNav(false); }}
-              className={`icon-button ${activeNav === "Settings" ? "nav-item-active" : ""}`}
+              className={`icon-button gap-1.5 px-2 ${activeNav === "Settings" ? "nav-item-active" : ""}`}
             >
               <Icon name="settings" className="size-4" />
+              <span className="text-xs font-bold">Settings</span>
             </AppButton>
           </div>
         </div>
@@ -1028,13 +1249,18 @@ export default function App() {
               allCourses={allCourses}
               hiddenCourses={hiddenCourses}
               onToggleCourseHidden={toggleCourseHidden}
-              canvasFeedUrl={canvasFeedUrl}
+              feedConnected={feedConnected}
               feedItemCount={feedItems.length}
               feedError={feedError}
               onConnectFeed={connectCanvasFeed}
               onDisconnectFeed={disconnectCanvasFeed}
               preferredKinds={preferredKinds}
               onTogglePreferredKind={togglePreferredKind}
+              onConnectHosted={connectHostedStore}
+              onSynced={async () => applyHostedStore(await fetchHostedStore())}
+              hostedConnected={storeItems.length > 0 || storeCourses.length > 0}
+              allItems={allItems}
+              allCoursesForPush={allCourses}
               brightspaceCourseCount={brightspaceCourseCount}
               onBrightspaceConnected={setBrightspaceCourseCount}
               webworkConnections={webworkConnections}
@@ -1046,7 +1272,7 @@ export default function App() {
                 <div className="text-xl font-bold tracking-tight">Weekly schedule</div>
                 <div className="mt-1 text-sm text-[var(--muted)]">Your recurring class meetings, from Workday</div>
               </div>
-              <ScheduleView meetings={meetings} now={now} />
+              <ScheduleView meetings={shownMeetings} now={now} />
             </section>
           ) : (
           <>
@@ -1140,13 +1366,13 @@ export default function App() {
                     ))}
                     {topAssignments.length === 0 && (
                       <div className="p-10 text-center text-sm text-[var(--muted)]">
-                        {sampleMode ? "Nothing upcoming." : "Nothing yet. Connect Canvas or PrairieLearn above."}
+                        {sampleMode ? "Nothing upcoming." : "Nothing yet. Connect Canvas or PrairieLearn in Settings."}
                       </div>
                     )}
                   </div>
                 </>
               ) : activeNav === "Calendar" ? (
-                <CalendarSection items={activeItems} meetings={meetings} now={now} onToggleItemDone={toggleItemDone} />
+                <CalendarSection items={activeItems} meetings={shownMeetings} now={now} onToggleItemDone={toggleItemDone} />
               ) : (
               <>
               <div className="flex flex-col gap-4 border-b border-[var(--line)] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
@@ -1200,7 +1426,7 @@ export default function App() {
                 {activeNavTab === "announcements" ? (
                   visibleAnnouncements.length === 0 ? (
                     <div className="p-10 text-center text-sm text-[var(--muted)]">
-                      {sampleMode ? "No announcements in sample data." : "Nothing yet. Connect Canvas above."}
+                      {sampleMode ? "No announcements in sample data." : "Nothing yet. Connect Canvas in Settings."}
                     </div>
                   ) : (
                     visibleAnnouncements.map((item) => (
@@ -1217,7 +1443,7 @@ export default function App() {
                 ) : activeNavTab === "courses" ? (
                   courses.length === 0 ? (
                     <div className="p-10 text-center text-sm text-[var(--muted)]">
-                      {sampleMode ? "No courses." : "Nothing yet. Connect Canvas above."}
+                      {sampleMode ? "No courses." : "Nothing yet. Connect Canvas in Settings."}
                     </div>
                   ) : (
                     courses.map((course) => (
@@ -1282,7 +1508,7 @@ export default function App() {
                     ))}
                     {visible.length === 0 && (
                       <div className="p-10 text-center text-sm text-[var(--muted)]">
-                        {sampleMode ? "Nothing upcoming." : "Nothing yet. Connect Canvas or PrairieLearn above."}
+                        {sampleMode ? "Nothing upcoming." : "Nothing yet. Connect Canvas or PrairieLearn in Settings."}
                       </div>
                     )}
                   </>

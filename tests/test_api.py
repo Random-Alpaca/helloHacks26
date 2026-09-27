@@ -6,6 +6,8 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 
+from icalendar import Calendar as ICalendar
+
 from hub import brightspace, db, webwork
 from hub.api import ALLOWED_ORIGIN, Handler, _announcements, _undated_tasks, _upcoming
 from hub.models import Course, Item
@@ -157,6 +159,62 @@ def test_post_with_no_origin_header_is_allowed_through(tmp_path, monkeypatch):
         except urllib.error.HTTPError as e:
             # Rejected by the feed host allowlist, not by the origin check.
             assert e.code == 400
+    finally:
+        server.shutdown()
+
+
+def _seed_calendar_items(tmp_path):
+    # Uses the real, unpatched db.connect (this runs before _running_server
+    # does its own monkeypatch below) - patching db.connect here too would
+    # double-wrap functools.partial and break the *next* patch's call signature.
+    conn = db.connect(tmp_path / "hub.db")
+    quiz = Item(course="CPSC 121", category="deadline", kind="quiz", title="Quiz 2",
+                due=NOW + timedelta(days=2), url="https://x/q2", source="canvas")
+    exam = Item(course="CPSC 121", category="deadline", kind="exam", title="Midterm 1",
+                due=NOW + timedelta(days=9), url="https://x/e1", source="canvas")
+    db.save(conn, [COURSE], [quiz, exam])
+
+
+def test_calendar_ics_serves_a_valid_combined_feed(tmp_path, monkeypatch):
+    _seed_calendar_items(tmp_path)
+    server = _running_server(tmp_path, monkeypatch)
+    try:
+        port = server.server_address[1]
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/calendar.ics") as res:
+            assert res.status == 200
+            assert res.headers["Content-Type"].startswith("text/calendar")
+            cal = ICalendar.from_ical(res.read())
+            summaries = sorted(str(ev["summary"]) for ev in cal.walk("VEVENT"))
+            assert summaries == ["Midterm 1 [CPSC 121]", "Quiz 2 [CPSC 121]"]
+    finally:
+        server.shutdown()
+
+
+def test_calendar_kind_ics_serves_only_that_kind(tmp_path, monkeypatch):
+    _seed_calendar_items(tmp_path)
+    server = _running_server(tmp_path, monkeypatch)
+    try:
+        port = server.server_address[1]
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/calendar/quiz.ics") as res:
+            cal = ICalendar.from_ical(res.read())
+            summaries = [str(ev["summary"]) for ev in cal.walk("VEVENT")]
+            assert summaries == ["Quiz 2 [CPSC 121]"]
+    finally:
+        server.shutdown()
+
+
+def test_api_calendar_kinds_lists_kinds_with_colors(tmp_path, monkeypatch):
+    _seed_calendar_items(tmp_path)
+    server = _running_server(tmp_path, monkeypatch)
+    try:
+        port = server.server_address[1]
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/calendar/kinds",
+                                      headers={"Origin": ALLOWED_ORIGIN})
+        with urllib.request.urlopen(req) as res:
+            assert res.headers["Access-Control-Allow-Origin"] == ALLOWED_ORIGIN
+            kinds = json.loads(res.read())
+            assert {"kind": "quiz", "color": "#7C3AED"} in kinds
+            assert {"kind": "exam", "color": "#DC2626"} in kinds
     finally:
         server.shutdown()
 

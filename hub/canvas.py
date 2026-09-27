@@ -8,8 +8,9 @@ CWL password.
 Try it:  uv run python -m hub.canvas
 """
 import json
+import re
 from datetime import date, datetime, timedelta
-from urllib.parse import urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 import requests
 
@@ -213,6 +214,41 @@ def _run(req, start, end):
     for c in raw:
         assignments = site.get_all(req, f"{BASE}/api/v1/courses/{c['id']}/assignments", {"per_page": 100}, unwrap)
         items += [to_undated_item(a, codes.get(c["id"], "")) for a in assignments if not a.get("due_at")]
+    return courses, items
+
+
+def parse_capture(capture):
+    """Map a minimal browser-extension capture through this Canvas adapter.
+
+    The extension transports JSON from the student's own signed-in tab. This
+    remains the only place that turns Canvas records into our shared model.
+    """
+    if not isinstance(capture, dict) or capture.get("source") != SITE:
+        raise ValueError("expected a Canvas capture")
+    raw_courses = capture.get("courses")
+    planner = capture.get("planner")
+    undated = capture.get("undated")
+    if (not isinstance(raw_courses, list) or not isinstance(planner, list)
+            or not isinstance(undated, list) or len(raw_courses) > 100
+            or len(planner) > 3000 or len(undated) > 3000):
+        raise ValueError("invalid Canvas capture size or shape")
+    if any(not isinstance(row, dict) for row in raw_courses + planner + undated):
+        raise ValueError("Canvas capture contains a non-object row")
+    courses = [to_course(c) for c in raw_courses]
+    codes = {c["id"]: c.get("course_code", "") for c in raw_courses}
+    items = [to_item(p, codes) for p in planner]
+    items += [to_undated_item(a, codes.get(a.get("course_id"), "")) for a in undated]
+    for item in items:
+        parsed = urlparse(item.url)
+        query = parse_qs(parsed.query)
+        if (parsed.scheme != "https" or parsed.netloc != urlparse(BASE).netloc
+                or parsed.username or parsed.password or parsed.fragment
+                or not parsed.path or not item.title
+                or set(query) - {"event_id", "include_contexts"}
+                or any(not value.isdecimal() for value in query.get("event_id", []))
+                or any(not re.fullmatch(r"course_\d+", value) for value in query.get("include_contexts", []))
+                or item.due is not None and item.due.tzinfo is None):
+            raise ValueError("Canvas capture contains an invalid item")
     return courses, items
 
 

@@ -182,3 +182,29 @@ def test_canvas_oauth_error_does_not_echo_upstream_secrets(monkeypatch):
         canvas.exchange_code("fake-client", "fake-secret", "https://hub.example/callback", "fake-code")
     assert "fake-secret" not in str(error.value)
     assert "fake-code" not in str(error.value)
+
+
+def test_extension_capture_uses_the_same_canvas_model_mapping():
+    capture = {
+        "source": "canvas",
+        "courses": [{"id": 7, "course_code": "CPSC 121", "name": "Models"}],
+        "planner": [{"course_id": 7, "plannable_type": "quiz",
+                     "plannable_date": "2026-09-30T06:59:00Z",
+                     "plannable": {"title": "Quiz 2"},
+                     "html_url": "https://canvas.ubc.ca/courses/7/quizzes/3",
+                     "submissions": {"submitted": True}}],
+        "undated": [{"course_id": 7, "name": "Reading", "due_at": None,
+                     "html_url": "https://canvas.ubc.ca/courses/7/assignments/9",
+                     "has_submitted_submissions": False}],
+    }
+    courses, items = canvas.parse_capture(capture)
+    assert [c.code for c in courses] == ["CPSC 121"]
+    assert [(i.course, i.kind, i.done) for i in items] == [
+        ("CPSC 121", "quiz", True), ("CPSC 121", "assignment", False)
+    ]
+    capture["planner"][0]["html_url"] = "https://evil.example/steal"
+    with pytest.raises(ValueError, match="invalid item"):
+        canvas.parse_capture(capture)
+    capture["planner"][0]["html_url"] = "https://canvas.ubc.ca/courses/7/quizzes/3?access_token=fake"
+    with pytest.raises(ValueError, match="invalid item"):
+        canvas.parse_capture(capture)

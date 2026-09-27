@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from icalendar import Calendar as ICalendar
 
 from hub import ics
-from hub.export_ics import _uid, to_ics
+from hub.export_ics import _uid, color_for_kind, known_kinds, to_ics, KIND_COLOR_FALLBACK
 from hub.models import Item
 
 ITEM_A = Item(course="CPSC 121", category="task", kind="assignment", title="Problem Set 3",
@@ -61,3 +61,53 @@ def test_output_is_a_valid_calendar_with_no_events_for_an_empty_input():
     ics_bytes = to_ics([])
     assert b"BEGIN:VCALENDAR" in ics_bytes
     assert b"BEGIN:VEVENT" not in ics_bytes
+
+
+# ---------------------------------------------------------------------------
+# Colour-coordination (kind filtering + CATEGORIES): reconciled with the
+# per-kind-feed design this project separately explored, added here instead
+# of as a competing module so app.py's existing "Add to my calendar" button
+# and this file's own round-trip contract stay exactly as they were.
+# ---------------------------------------------------------------------------
+
+
+def test_every_event_carries_a_categories_property_matching_its_kind():
+    cal = ICalendar.from_ical(to_ics([ITEM_A, ITEM_B]))
+    by_summary = {str(e["summary"]): [str(c) for c in e["categories"].cats] for e in cal.walk("VEVENT")}
+    assert by_summary["Problem Set 3 [CPSC 121]"] == ["Assignment"]
+    assert by_summary["Midterm 1 [MATH 100]"] == ["Exam"]
+
+
+def test_categories_do_not_break_the_existing_round_trip():
+    # The concrete compatibility risk this addition had to avoid: adding a
+    # new iCalendar property must not change what hub.ics.parse() reads back.
+    parsed = ics.parse(to_ics([ITEM_A]).decode(), source="canvas")
+    assert (parsed[0].course, parsed[0].title) == (ITEM_A.course, ITEM_A.title)
+
+
+def test_to_ics_with_a_kind_filters_to_only_that_kind():
+    cal = ICalendar.from_ical(to_ics([ITEM_A, ITEM_B], kind="exam"))
+    summaries = [str(e["summary"]) for e in cal.walk("VEVENT")]
+    assert summaries == ["Midterm 1 [MATH 100]"]
+
+
+def test_to_ics_with_a_kind_and_no_matches_is_a_valid_empty_calendar():
+    ics_bytes = to_ics([ITEM_A], kind="exam")
+    assert b"BEGIN:VCALENDAR" in ics_bytes
+    assert b"BEGIN:VEVENT" not in ics_bytes
+
+
+def test_to_ics_calendar_name_reflects_the_kind_filter():
+    combined = ICalendar.from_ical(to_ics([ITEM_A]))
+    exam_only = ICalendar.from_ical(to_ics([ITEM_A], kind="exam"))
+    assert str(combined.get("x-wr-calname")) == "Lauds"
+    assert str(exam_only.get("x-wr-calname")) == "Lauds: Exam"
+
+
+def test_known_kinds_lists_distinct_kinds_with_a_due_date_only():
+    assert known_kinds([ITEM_A, ITEM_B, ITEM_NO_DUE]) == ["assignment", "exam"]
+
+
+def test_color_for_kind_known_and_unknown():
+    assert color_for_kind("exam") != color_for_kind("quiz")
+    assert color_for_kind("some-future-provider-kind") == KIND_COLOR_FALLBACK
