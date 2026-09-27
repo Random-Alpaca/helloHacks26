@@ -37,8 +37,16 @@ class handler(BaseHTTPRequestHandler):
         content_type = self.headers.get("Content-Type", "").split(";")[0].strip()
         if content_type != "application/json":
             return self._json({"error": "expected Content-Type: application/json"}, 400)
-        length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(length)) if length else {}
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            return self._json({"error": "bad Content-Length"}, 400)
+        try:
+            body = json.loads(self.rfile.read(length)) if length else {}
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return self._json({"error": "malformed JSON body"}, 400)
+        if not isinstance(body, dict):
+            return self._json({"error": "expected a JSON object body"}, 400)
         url = body.get("url", "")
         try:
             items = ics.fetch_untrusted(url, "canvas")

@@ -112,7 +112,22 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._json({"error": "not found"}, status=404)
 
+    def _check_origin(self):
+        """Hard-reject a cross-origin POST. A page on an attacker domain that
+        resolves to 127.0.0.1 (DNS rebinding) could otherwise trigger a real
+        Canvas login or feed fetch - _cors_headers() alone only controls
+        whether the *response* is readable, it never stops the request from
+        running. A request with no Origin header at all (curl, a non-browser
+        client) is let through - only a browser always sends one."""
+        origin = self.headers.get("Origin")
+        if origin is not None and origin != ALLOWED_ORIGIN:
+            self._json({"error": "forbidden origin"}, status=403)
+            return False
+        return True
+
     def do_POST(self):
+        if not self._check_origin():
+            return
         path = urlparse(self.path).path
         if path == "/api/connect/canvas":
             self._connect(canvas.fetch)
@@ -131,10 +146,19 @@ class Handler(BaseHTTPRequestHandler):
         content_type = self.headers.get("Content-Type", "").split(";")[0].strip()
         if content_type != "application/json":
             raise ValueError("expected Content-Type: application/json")
-        length = int(self.headers.get("Content-Length", 0))
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            raise ValueError("bad Content-Length")
         if length == 0:
             return {}
-        return json.loads(self.rfile.read(length))
+        try:
+            body = json.loads(self.rfile.read(length))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise ValueError("malformed JSON body")
+        if not isinstance(body, dict):
+            raise ValueError("expected a JSON object body")
+        return body
 
     def _feed(self):
         """POST /api/feed: {url} -> that feed's items, parsed fresh, nothing

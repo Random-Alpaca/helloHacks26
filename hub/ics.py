@@ -15,20 +15,35 @@ office hours and everything else came back "assignment"), and identity
 plus the course id already sitting in that same generic URL's query string
 - no extra request needed, so the no-auth "paste your feed link" flow still
 needs nothing but the feed itself.
+
+Hardened against the feed oracle + security review on #66:
+- titles containing their own "[...]" were coming out blank
+- an all-day date landed on the wrong calendar day in Vancouver
+- the rebuilt event link didn't match Canvas's real one
+- a redirect could bypass the host allowlist, and error messages echoed
+  the feed URL (a secret) back to the caller
 """
 import os
 import re
+import time
 from datetime import date, datetime, timezone
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo
 
 import requests
 from icalendar import Calendar
 
 from hub.models import Item, category_for, classify_urgency, status_of
 
+VANCOUVER = ZoneInfo("America/Vancouver")
+
 # Canvas puts "[COURSE CODE]" on the end of every event/assignment summary.
 # Moodle feeds don't, so course comes back "" there - fine for a first cut.
-COURSE_SUFFIX = re.compile(r"\s*\[(.+?)\]\s*$")
+# [^\[\]]+, not a lazy .+?: a title that itself contains "[...]" (seen on
+# the feed oracle) needs the LAST bracket group specifically, and a
+# negated class gets that in one linear pass instead of backtracking
+# through nested brackets (also avoids a ReDoS shape on adversarial input).
+COURSE_SUFFIX = re.compile(r"\s*\[([^\[\]]+)\]\s*$")
 
 # Canvas's own UID shape for a calendar-feed VEVENT.
 UID_RE = re.compile(r"^event-(assignment|calendar-event)-(\d+)$")
@@ -39,13 +54,17 @@ COURSE_ID_RE = re.compile(r"course_(\d+)")
 
 def _due(dt):
     """dtstart.dt is a bare `date` for an all-day event (no time component) -
-    never a naive datetime here, matching every other adapter's "always
-    tz-aware or None" rule. A timed event's dt is already tz-aware (Canvas's
-    feed uses UTC "Z" instants), so it passes through unchanged."""
+    treated as due at the end of that day, Vancouver time: UTC midnight is
+    the *previous* calendar day there for most of the year, which put a
+    "due today" item a day early. A naive datetime (a school's feed that
+    doesn't state a timezone at all) gets the same zone attached rather
+    than staying naive, which would crash anything comparing it against
+    datetime.now(timezone.utc). An already-aware datetime (Canvas's own
+    timed events, UTC "Z" instants) passes through unchanged."""
     if isinstance(dt, datetime):
-        return dt
+        return dt if dt.tzinfo else dt.replace(tzinfo=VANCOUVER)
     if isinstance(dt, date):
-        return datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
+        return datetime(dt.year, dt.month, dt.day, 23, 59, tzinfo=VANCOUVER)
     return None
 
 
@@ -63,17 +82,25 @@ def _kind_and_id(uid, url):
 def _deep_link(url, kind, item_id):
     """The item's own page, not the generic calendar page every event's URL
     otherwise shares - rebuilt from the course id already in that URL's
-    query string plus UID's item id. Falls back to the feed's own (generic,
-    but real) URL when either piece is missing, and always includes UID as
-    a fragment so (source, url) stays unique per item even then (rule 4)."""
+    query string plus UID's item id. Verified against a real self-hosted
+    Canvas: an assignment's real page is /courses/<id>/assignments/<id>,
+    but a calendar event's is /calendar?event_id=<id>&include_contexts=
+    course_<id> - not /courses/<id>/calendar_events/<id>, which looked
+    plausible but isn't what Canvas actually links to. Falls back to the
+    feed's own (generic, but real) URL when either piece is missing, and
+    always includes UID as a fragment so (source, url) stays unique per
+    item even then (rule 4)."""
     if item_id is None:
         return url
     course_m = COURSE_ID_RE.search(url)
     if not course_m:
         return f"{url}#{item_id}" if url else ""
+    course_id = course_m.group(1)
     parsed = urlparse(url)
-    path = "assignments" if kind == "assignment" else "calendar_events"
-    return f"{parsed.scheme}://{parsed.netloc}/courses/{course_m.group(1)}/{path}/{item_id}"
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    if kind == "assignment":
+        return f"{base}/courses/{course_id}/assignments/{item_id}"
+    return f"{base}/calendar?event_id={item_id}&include_contexts=course_{course_id}"
 
 
 def parse(ics_text, source):
@@ -136,18 +163,42 @@ def is_allowed_feed_host(url):
 def fetch_untrusted(url, source):
     """Validate, fetch, parse - the one function both /api/feed
     implementations (hub/api.py for local mode, the Vercel function for the
-    hosted site) call, so the host allowlist and size/time limits live in
-    exactly one place (rule 1). Never logs `url` - it's a secret, like a
-    token. Raises ValueError if the host isn't allowed or the response is
-    too large, requests.HTTPError/Timeout on a bad, expired or slow feed."""
+    hosted site) call, so the host allowlist, size/time limits and redirect
+    handling live in exactly one place (rule 1). Never logs `url`, and never
+    raises an exception that could contain it (requests' own HTTPError
+    embeds the request URL in its message, so it's caught and replaced
+    below) - it's a secret, like a token. Every failure raises ValueError
+    with a message safe to show on screen."""
     if not is_allowed_feed_host(url):
         raise ValueError("that isn't an allowed Canvas calendar-feed host")
-    r = requests.get(url, timeout=FEED_TIMEOUT_S, stream=True)
-    r.raise_for_status()
-    body = r.raw.read(MAX_FEED_BYTES + 1, decode_content=True)
-    if len(body) > MAX_FEED_BYTES:
-        raise ValueError("feed response too large")
-    return parse(body.decode("utf-8", errors="replace"), source)
+    try:
+        r = requests.get(url, timeout=FEED_TIMEOUT_S, stream=True, allow_redirects=False)
+    except requests.RequestException:
+        raise ValueError("couldn't reach the feed")
+    if 300 <= r.status_code < 400:
+        # A redirect could point anywhere, including past the host
+        # allowlist (e.g. an internal address) - refuse rather than follow
+        # it, even to another allowed host.
+        raise ValueError("that feed redirected somewhere else")
+    if not r.ok:
+        raise ValueError(f"feed returned {r.status_code}")
+    # requests' `timeout` only bounds a single socket read, not the whole
+    # response - a slow-drip server (a few bytes every few seconds) can
+    # otherwise hold the connection open far past FEED_TIMEOUT_S. An
+    # explicit wall-clock deadline across all chunks closes that gap.
+    deadline = time.monotonic() + FEED_TIMEOUT_S
+    chunks, total = [], 0
+    try:
+        for chunk in r.iter_content(chunk_size=65_536):
+            total += len(chunk)
+            if total > MAX_FEED_BYTES:
+                raise ValueError("feed response too large")
+            if time.monotonic() > deadline:
+                raise ValueError("feed took too long to respond")
+            chunks.append(chunk)
+    except requests.RequestException:
+        raise ValueError("couldn't reach the feed")
+    return parse(b"".join(chunks).decode("utf-8", errors="replace"), source)
 
 
 def to_dict(item, now):
