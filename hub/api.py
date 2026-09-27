@@ -105,6 +105,8 @@ class Handler(BaseHTTPRequestHandler):
             self._connect(canvas.fetch)
         elif path == "/api/connect/prairielearn":
             self._connect(prairielearn.fetch)
+        elif path == "/api/connect/prairielearn_ok":
+            self._connect(lambda: prairielearn.fetch("prairielearn_ok"))
         else:
             self._json({"error": "not found"}, status=404)
 

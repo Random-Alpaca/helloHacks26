@@ -36,7 +36,7 @@ def row(html):
 
 
 def test_open_assessment_gets_due_from_100pct_tier_and_a_link():
-    i = to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments")
+    i = to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn")
     assert (i.category, i.kind, i.title) == ("task", "assignment", "A Dictionary Client")
     assert i.due.isoformat() == "2026-09-27T23:59:59-07:00"  # PDT, timezone-aware like Canvas's due dates
     assert i.url == "https://us.prairielearn.com/pl/course_instance/221053/assessment_instance/14835025/"
@@ -45,19 +45,19 @@ def test_open_assessment_gets_due_from_100pct_tier_and_a_link():
 def test_due_is_never_naive():
     # A naive due here would crash any code that compares it against
     # datetime.now(timezone.utc) - e.g. Terrace's "Hide overdue" toggle.
-    i = to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments")
+    i = to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn")
     assert i.due.tzinfo is not None
 
 
 def test_not_yet_open_assessment_has_no_due_or_link():
-    i = to_item(row(NOT_OPEN_ROW), "CPSC 317", "Programming Assignments")
+    i = to_item(row(NOT_OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn")
     assert i.due is None
     assert i.url == ""
 
 
 def test_group_heading_maps_quiz_and_exam():
-    assert to_item(row(OPEN_ROW), "CPSC 317", "Practice for Quizzes").kind == "quiz"
-    assert to_item(row(OPEN_ROW), "CPSC 317", "Formal Quizzes (repeated for practice)").kind == "exam"
+    assert to_item(row(OPEN_ROW), "CPSC 317", "Practice for Quizzes", "prairielearn").kind == "quiz"
+    assert to_item(row(OPEN_ROW), "CPSC 317", "Formal Quizzes (repeated for practice)", "prairielearn").kind == "exam"
 
 
 def test_last_tier_with_no_end_date_is_none():
@@ -67,3 +67,13 @@ def test_last_tier_with_no_end_date_is_none():
 def test_course_title_parsing():
     c = to_course("221053", "CPSC 317: Internet Computing, 2026 Winter Term 1")
     assert (c.code, c.title, c.term) == ("CPSC 317", "Internet Computing", "2026 Winter Term 1")
+
+
+def test_okanagan_campus_gets_its_own_base_url_and_source():
+    # A real student found their MECH 260 assessments live on UBC Okanagan's
+    # own PrairieLearn instance, not the shared us.prairielearn.com one -
+    # each campus needs its own base URL and its own `source`, so the two
+    # never collide under the same (source, url) identity.
+    i = to_item(row(OPEN_ROW), "MECH 260", "Programming Assignments", "prairielearn_ok")
+    assert i.source == "prairielearn_ok"
+    assert i.url == "https://prairielearn.ok.ubc.ca/pl/course_instance/221053/assessment_instance/14835025/"
