@@ -153,6 +153,7 @@ export function fetchDemo(fetchImpl = globalThis.fetch) {
           items: body.items.map(normaliseApiItem),
           announcements: Array.isArray(body.announcements) ? body.announcements.map(normaliseApiItem) : [],
           courses: Array.isArray(body.courses) ? body.courses : SAMPLE_COURSES,
+          meetings: Array.isArray(body.schedule) ? body.schedule.map(normaliseApiMeeting) : [],
         };
       } catch {
         return null;
@@ -199,6 +200,25 @@ export async function fetchCourses(useSample) {
   const res = await fetch(`${base}/api/courses`);
   if (!res.ok) throw new Error(`GET /api/courses failed: ${res.status}`);
   return res.json();
+}
+
+// /api/schedule's row shape (hub/api.py's _schedule, snake_case) -> the
+// camelCase Meeting shape web/lib/workday.js's import produces, so the
+// Schedule and Calendar views read both the same way.
+function normaliseApiMeeting(row) {
+  return {
+    course: row.course, kind: row.kind, days: row.days,
+    startTime: row.start_time, endTime: row.end_time, location: row.location,
+    termStart: row.term_start, termEnd: row.term_end, source: row.source,
+  };
+}
+
+// The demo student's recurring class meetings - hosted Sample mode only.
+// Local mode's /api/schedule isn't wired into web/ yet, and Sample off never
+// shows anything fake, so both get [] (a Workday import still works as before).
+export async function fetchDemoMeetings(useSample) {
+  if (apiBase() || !useSample) return [];
+  return (await fetchDemo())?.meetings ?? [];
 }
 
 export async function connectCanvas() {

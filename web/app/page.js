@@ -8,6 +8,7 @@ import {
   connectPrairieLearnOk,
   displayLabel,
   fetchAnnouncements,
+  fetchDemoMeetings,
   connectCanvasFeed as postCanvasFeed,
   refreshCanvasFeed,
   disconnectCanvasFeed as deleteCanvasFeed,
@@ -783,6 +784,7 @@ export default function App() {
   const [announcements, setAnnouncements] = useState([]);
   const [fetchedCourses, setFetchedCourses] = useState([]);
   const [meetings, setMeetings] = useState([]);
+  const [demoMeetings, setDemoMeetings] = useState([]);
   const [loadError, setLoadError] = useState(null);
   const [hiddenCourses, setHiddenCourses] = useState([]);
   const [manuallyDoneKeys, setManuallyDoneKeys] = useState([]);
@@ -944,6 +946,11 @@ export default function App() {
     } catch {
       setAnnouncements([]);
     }
+    // The demo student's class meetings (hosted Sample mode; [] otherwise).
+    // Kept apart from `meetings` (the student's own Workday import) so they
+    // never count as a real connection and vanish when Sample goes off.
+    const nextDemoMeetings = await fetchDemoMeetings(useSample);
+    if (requestId === loadRequestId.current) setDemoMeetings(nextDemoMeetings);
   }
 
   function importWorkdaySchedule(imported) {
@@ -1013,6 +1020,7 @@ export default function App() {
   // count toward Settings' Connections, never the sample/demo `items`.
   const connectedItems = isLocalMode() && !sampleMode ? allItems : mergeItems(storeItems, feedItems);
   const connections = selectConnections(connectedItems, meetings);
+  const shownMeetings = mergeMeetings(demoMeetings, meetings);
 
   const customStyle = theme === "custom"
     ? { "--page": customColors.page, "--surface": customColors.surface, "--ink": customColors.ink, "--accent": customColors.accent }
@@ -1113,7 +1121,7 @@ export default function App() {
                 <div className="text-xl font-bold tracking-tight">Weekly schedule</div>
                 <div className="mt-1 text-sm text-[var(--muted)]">Your recurring class meetings, from Workday</div>
               </div>
-              <ScheduleView meetings={meetings} now={now} />
+              <ScheduleView meetings={shownMeetings} now={now} />
             </section>
           ) : (
           <>
@@ -1213,7 +1221,7 @@ export default function App() {
                   </div>
                 </>
               ) : activeNav === "Calendar" ? (
-                <CalendarSection items={activeItems} meetings={meetings} now={now} onToggleItemDone={toggleItemDone} />
+                <CalendarSection items={activeItems} meetings={shownMeetings} now={now} onToggleItemDone={toggleItemDone} />
               ) : (
               <>
               <div className="flex flex-col gap-4 border-b border-[var(--line)] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
