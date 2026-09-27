@@ -842,7 +842,7 @@ export default function App() {
                     ))}
                     {topAssignments.length === 0 && (
                       <div className="p-10 text-center text-sm text-[var(--muted)]">
-                        {sampleMode ? "Nothing upcoming." : "Nothing yet. Connect Canvas or PrairieLearn above."}
+                        {sampleMode ? "Nothing upcoming." : "Nothing yet. Connect Canvas or PrairieLearn in Settings."}
                       </div>
                     )}
                   </div>
@@ -902,7 +902,7 @@ export default function App() {
                 {activeNavTab === "announcements" ? (
                   visibleAnnouncements.length === 0 ? (
                     <div className="p-10 text-center text-sm text-[var(--muted)]">
-                      {sampleMode ? "No announcements in sample data." : "Nothing yet. Connect Canvas above."}
+                      {sampleMode ? "No announcements in sample data." : "Nothing yet. Connect Canvas in Settings."}
                     </div>
                   ) : (
                     visibleAnnouncements.map((item) => (
@@ -919,7 +919,7 @@ export default function App() {
                 ) : activeNavTab === "courses" ? (
                   courses.length === 0 ? (
                     <div className="p-10 text-center text-sm text-[var(--muted)]">
-                      {sampleMode ? "No courses." : "Nothing yet. Connect Canvas above."}
+                      {sampleMode ? "No courses." : "Nothing yet. Connect Canvas in Settings."}
                     </div>
                   ) : (
                     courses.map((course) => (
@@ -972,7 +972,7 @@ export default function App() {
                     ))}
                     {visible.length === 0 && (
                       <div className="p-10 text-center text-sm text-[var(--muted)]">
-                        {sampleMode ? "Nothing upcoming." : "Nothing yet. Connect Canvas or PrairieLearn above."}
+                        {sampleMode ? "Nothing upcoming." : "Nothing yet. Connect Canvas or PrairieLearn in Settings."}
                       </div>
                     )}
                   </>

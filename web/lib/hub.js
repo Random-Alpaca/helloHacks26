@@ -2,10 +2,13 @@
 //   - Local mode: NEXT_PUBLIC_HUB_API is set -> talk to Jacky's hub/api.py
 //     over http://127.0.0.1:<port>, which returns rows already ranked and
 //     annotated with status/urgency from hub.models (never recomputed here).
-//   - Sample mode (hosted Vercel default): no local API. Rows come from the
-//     hosted GET /api/demo (web/api/demo.py): a fake "Demo Student" run
-//     through the real hub/ adapters and fusion. If that fails, the fixed
-//     SAMPLE_ROWS below, so the page never breaks.
+//   - Hosted (no local API), Sample on: rows come from the hosted GET
+//     /api/demo (web/api/demo.py): a fake "Demo Student" run through the
+//     real hub/ adapters and fusion. If that fails, the fixed SAMPLE_ROWS
+//     below, so the page never breaks.
+//   - Hosted, Sample off: nothing fake, ever. Only what the student
+//     connected in this browser (the Canvas calendar feed, a Workday
+//     import) - page.js merges those in; these fetchers return nothing.
 
 const URGENCY_ORDER = ["overdue", "critical", "high", "medium", "low"];
 
@@ -165,7 +168,7 @@ export function resetDemoCache() {
 
 export async function fetchUpcoming(useSample) {
   const base = apiBase();
-  if (!base) return (await fetchDemo())?.items ?? sampleItems();
+  if (!base) return useSample ? ((await fetchDemo())?.items ?? sampleItems()) : [];
   if (useSample) return sampleItems();
   const res = await fetch(`${base}/api/upcoming`);
   if (!res.ok) throw new Error(`GET /api/upcoming failed: ${res.status}`);
@@ -180,7 +183,7 @@ export async function fetchUpcoming(useSample) {
 // announcement-shaped, so there's nothing to fake.
 export async function fetchAnnouncements(useSample) {
   const base = apiBase();
-  if (!base) return (await fetchDemo())?.announcements ?? [];
+  if (!base) return useSample ? ((await fetchDemo())?.announcements ?? []) : [];
   if (useSample) return [];
   const res = await fetch(`${base}/api/announcements`);
   if (!res.ok) throw new Error(`GET /api/announcements failed: ${res.status}`);
@@ -190,7 +193,7 @@ export async function fetchAnnouncements(useSample) {
 
 export async function fetchCourses(useSample) {
   const base = apiBase();
-  if (!base) return (await fetchDemo())?.courses ?? SAMPLE_COURSES;
+  if (!base) return useSample ? ((await fetchDemo())?.courses ?? SAMPLE_COURSES) : [];
   if (useSample) return SAMPLE_COURSES;
   const res = await fetch(`${base}/api/courses`);
   if (!res.ok) throw new Error(`GET /api/courses failed: ${res.status}`);
