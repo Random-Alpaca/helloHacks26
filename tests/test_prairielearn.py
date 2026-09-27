@@ -247,6 +247,26 @@ def test_resolve_campus_rejects_ip_literals_and_localhost(bad):
         resolve_campus(bad)
 
 
+@pytest.mark.parametrize("bad", [
+    "https://127.1",  # short-form dotted quad
+    "https://2130706433",  # pure decimal
+    "https://0x7f000001",  # hex
+    "https://017700000001",  # octal
+    "https://0",  # bare "any address"
+])
+def test_resolve_campus_rejects_legacy_ipv4_notations_a_browser_would_still_resolve(bad):
+    # ipaddress.ip_address() only recognizes the canonical dotted-quad/full
+    # IPv6 forms - it rejects every one of these as "not an IP", so relying
+    # on it alone let them all through as ordinary hostnames. A browser's
+    # URL parser (what Playwright actually navigates with) accepts every one
+    # of these as an alternate IPv4 notation and resolves it to a real
+    # address (each of the 5 above -> 127.0.0.1 or 0.0.0.0) - a real bypass
+    # of the same protection the exact-IP test above checks, found on
+    # review after #56 landed.
+    with pytest.raises(ValueError):
+        resolve_campus(bad)
+
+
 class _FakeReq:
     def __init__(self, html):
         self.html = html

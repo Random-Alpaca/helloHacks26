@@ -58,6 +58,25 @@ def _is_ip_literal(host):
         return False
 
 
+# ipaddress.ip_address() only recognizes the canonical dotted-quad/full-IPv6
+# forms - it rejects "127.1", "2130706433", "0x7f000001" and "017700000001"
+# as not-an-IP, so _is_ip_literal() alone waves all of those through as
+# "ordinary hostnames". A browser's URL parser (what Playwright actually
+# navigates with) accepts every one of those as an alternate IPv4 notation
+# and resolves it to a real address (all four examples above -> 127.0.0.1) -
+# a real bypass of the guard PM review on #56 asked for, found by a fresh
+# review. Reject anything where every dot-separated label is purely numeric
+# (decimal or 0x-hex) - the small risk of also rejecting a legitimate but
+# all-numeric-label hostname is an acceptable trade for closing this off,
+# since no real PrairieLearn deployment has ever used one.
+_NUMERIC_LABEL = re.compile(r"^(0[xX][0-9a-fA-F]+|[0-9]+)$")
+
+
+def _looks_like_numeric_ip(host):
+    labels = host.split(".")
+    return 1 <= len(labels) <= 4 and all(_NUMERIC_LABEL.match(label) for label in labels)
+
+
 def resolve_campus(campus):
     """A known short key resolves from CAMPUSES; anything else is treated as
     a student-pasted PrairieLearn URL for an instance we don't have listed
@@ -97,7 +116,7 @@ def resolve_campus(campus):
     if parsed.username is not None or parsed.password is not None:
         raise ValueError(f"URL must not contain a username/password: {campus!r}")
     host = parsed.hostname.lower().rstrip(".")
-    if host == "localhost" or _is_ip_literal(host):
+    if host == "localhost" or _is_ip_literal(host) or _looks_like_numeric_ip(host):
         raise ValueError(f"not a real PrairieLearn hostname: {campus!r}")
     port = "" if parsed.port in (None, 443) else f":{parsed.port}"
     base = f"https://{host}{port}"
