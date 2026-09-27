@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from hub import canvas, db, prairielearn
+from hub import canvas, db, ics, prairielearn
 from hub.logic import sort_items
 from hub.models import Item, classify_urgency, status_of
 
@@ -57,12 +57,22 @@ def _upcoming(conn):
 
 
 def _announcements(conn):
-    """Undated items (announcements, and anything else without a real
-    deadline) - already most-recent-first from db.undated(). No urgency
-    ranking here, unlike _upcoming(): sort_items() needs a due date to rank
-    by, and these don't have one."""
+    """Real announcements only - already most-recent-first from db.undated().
+    No urgency ranking here, unlike _upcoming(): sort_items() needs a due date
+    to rank by, and announcements don't have one.
+
+    db.undated() is every item with no due date, not just announcements - an
+    undated Canvas assignment (hub/canvas.py's to_undated_item, #43) or an
+    unopened PrairieLearn assessment has no due date either, and used to leak
+    into this feed looking like an announcement. Filter to kind="announcement"
+    here rather than in db.undated() itself, which other undated items may
+    still want to read from later.
+    # ponytail: an undated task/deadline has nowhere to surface at all right
+    # now (it's excluded here, and _upcoming() requires a due date) - fine
+    # until something asks for an "undated tasks" list of its own.
+    """
     now = datetime.now(timezone.utc)
-    return [_row_to_dict(r, now) for r in db.undated(conn)]
+    return [_row_to_dict(r, now) for r in db.undated(conn) if r[2] == "announcement"]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -112,7 +122,22 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._json({"error": "not found"}, status=404)
 
+    def _check_origin(self):
+        """Hard-reject a cross-origin POST. A page on an attacker domain that
+        resolves to 127.0.0.1 (DNS rebinding) could otherwise trigger a real
+        Canvas login or feed fetch - _cors_headers() alone only controls
+        whether the *response* is readable, it never stops the request from
+        running. A request with no Origin header at all (curl, a non-browser
+        client) is let through - only a browser always sends one."""
+        origin = self.headers.get("Origin")
+        if origin is not None and origin != ALLOWED_ORIGIN:
+            self._json({"error": "forbidden origin"}, status=403)
+            return False
+        return True
+
     def do_POST(self):
+        if not self._check_origin():
+            return
         path = urlparse(self.path).path
         if path == "/api/connect/canvas":
             self._connect(canvas.fetch)
@@ -121,16 +146,61 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/connect/prairielearn_ok":
             self._connect(lambda: prairielearn.fetch("prairielearn_ok"))
         elif path == "/api/connect/prairielearn_custom":
-            domain = self._read_json_body().get("domain", "")
-            self._connect(lambda: prairielearn.fetch(domain))
+            self._connect_prairielearn_custom()
+        elif path == "/api/feed":
+            self._feed()
         else:
             self._json({"error": "not found"}, status=404)
 
     def _read_json_body(self):
-        length = int(self.headers.get("Content-Length", 0))
+        """Same guard on both /api/feed implementations (this one and the
+        Vercel function, #47): a POST carrying a feed URL - someone's secret
+        - must say so explicitly, not be guessed at from an empty/absent
+        Content-Type. Also the one place a pasted PrairieLearn domain comes
+        through (/api/connect/prairielearn_custom), so the same hardening
+        covers both."""
+        content_type = self.headers.get("Content-Type", "").split(";")[0].strip()
+        if content_type != "application/json":
+            raise ValueError("expected Content-Type: application/json")
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            raise ValueError("bad Content-Length")
         if length == 0:
             return {}
-        return json.loads(self.rfile.read(length))
+        try:
+            body = json.loads(self.rfile.read(length))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise ValueError("malformed JSON body")
+        if not isinstance(body, dict):
+            raise ValueError("expected a JSON object body")
+        return body
+
+    def _connect_prairielearn_custom(self):
+        try:
+            domain = self._read_json_body().get("domain", "")
+        except ValueError as e:
+            return self._json({"ok": False, "error": str(e)}, status=400)
+        self._connect(lambda: prairielearn.fetch(domain))
+
+    def _feed(self):
+        """POST /api/feed: {url} -> that feed's items, parsed fresh, nothing
+        saved. url is never logged - see hub/ics.py's fetch_untrusted() for
+        the host allowlist and size/time limits shared with the Vercel
+        function (rule 1: one function, not two)."""
+        try:
+            url = self._read_json_body().get("url", "")
+        except ValueError as e:
+            return self._json({"error": str(e)}, status=400)
+        try:
+            items = ics.fetch_untrusted(url, "canvas")
+        except ValueError as e:
+            return self._json({"error": str(e)}, status=400)
+        except Exception as e:  # ponytail: same broad catch as _connect() - a bad/expired/
+            # slow feed shouldn't take the server down.
+            return self._json({"error": str(e)}, status=502)
+        now = datetime.now(timezone.utc)
+        self._json([ics.to_dict(i, now) for i in items])
 
     def _connect(self, fetch_fn):
         """Opens a browser window for the student to sign in themselves

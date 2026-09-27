@@ -1,6 +1,6 @@
 # API standards: integration targets
 
-Researched 2026-09-26. Unmarked claims were checked against the linked source. **[unverified]** means it came from a secondary source or was assumed.
+Researched 2026-09-26. **This is a research snapshot, not how we build.** The team went with browser-session login instead of PATs/`canvasapi` (UBC no longer issues student PATs); see AGENTS.md and `hub/`. Unmarked claims were checked against the linked source. **[unverified]** means it came from a secondary source or was assumed.
 
 ## TL;DR: what a student can use without UBC IT
 

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 
-from hub import canvas, db, prairielearn
+from hub import canvas, db, export_ics, key_dates, prairielearn
 from hub.logic import sort_items
 from hub.models import Course, Item, category_for, classify_urgency, status_of
 
@@ -41,6 +41,7 @@ with st.sidebar:
     hide_overdue = st.toggle("Hide overdue", value=False)
 
 conn = sample_conn() if demo else db.connect()
+db.save(conn, *key_dates.fetch("UBCV"))  # public, no login - always shown, sample or real
 now = datetime.now(timezone.utc)
 
 for tab, category in zip(st.tabs(["All", "Tasks", "Deadlines", "Materials"]), [None, "task", "deadline", "material"]):
@@ -66,3 +67,33 @@ for tab, category in zip(st.tabs(["All", "Tasks", "Deadlines", "Materials"]), [N
                            "Link": st.column_config.LinkColumn(display_text="open")},
             hide_index=True, use_container_width=True,
         )
+
+
+@st.dialog("Connect Workday")
+def _workday_dialog():
+    # ponytail: stub - hub/workday.py's parse_workday_courses() exists and is
+    # tested, but nothing calls it yet. Wire up a real st.file_uploader() +
+    # term input here (see design.md: student uploads their own "View My
+    # Courses" export, there's no login/API path) when this becomes more
+    # than a placeholder.
+    st.write("Workday import isn't wired up yet.")
+    st.caption("Coming soon: upload your \"View My Courses\" export from Workday to add your class schedule.")
+    st.file_uploader("View My Courses.xlsx", type="xlsx", disabled=True)
+
+
+st.divider()
+if st.button("Connect Workday", help="Not implemented yet - opens a placeholder"):
+    _workday_dialog()
+
+# #18: one merged .ics feed a student can drop straight into Apple/Google/
+# Outlook Calendar - the cheapest way into a routine they already have.
+_export_items = [
+    Item(course=r[0], category=r[1], kind=r[2], title=r[3],
+         due=datetime.fromisoformat(r[4]), url=r[5], source=r[7])
+    for r in db.upcoming(conn)
+]
+st.download_button(
+    "Add to my calendar", data=export_ics.to_ics(_export_items),
+    file_name="ubc-hub.ics", mime="text/calendar",
+    help="One .ics file with every upcoming item - subscribe to it in Apple/Google/Outlook Calendar.",
+)

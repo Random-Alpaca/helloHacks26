@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { selectConnections } from "./hub.js";
+import { hideCourseItems, mergeItems, selectConnections, selectVisibleCourses } from "./hub.js";
 
 test("selectConnections: no data means nothing is connected", () => {
   const connections = selectConnections([], []);
   assert.deepEqual(
     connections.map((c) => c.connected),
-    [false, false, false],
+    [false, false, false, false],
   );
 });
 
@@ -29,4 +29,43 @@ test("selectConnections: imported Workday courses count as connected regardless 
   const workday = connections.find((c) => c.id === "workday");
   assert.equal(workday.connected, true);
   assert.equal(workday.detail, "1 course imported");
+});
+
+test("selectConnections: an unrecognized source shows up as its own custom PrairieLearn row", () => {
+  // Any source that isn't one of the known providers is a PrairieLearn
+  // instance a student pasted in directly (resolve_campus() accepts a full
+  // URL for any self-hosted instance we don't have a fixed entry for).
+  const items = [{ source: "pl.autoed.ok.ubc.ca" }, { source: "pl.autoed.ok.ubc.ca" }];
+  const connections = selectConnections(items, []);
+  const custom = connections.find((c) => c.id === "pl.autoed.ok.ubc.ca");
+  assert.ok(custom, "custom source should get its own row");
+  assert.equal(custom.connected, true);
+  assert.equal(custom.detail, "2 items");
+  // and it shouldn't duplicate or displace the known providers
+  assert.equal(connections.filter((c) => c.id === "prairielearn").length, 1);
+});
+
+test("selectVisibleCourses: drops hidden courses, keeps everything else", () => {
+  const courses = [{ code: "CPSC 121" }, { code: "OLD 100" }, { code: "MATH 100" }];
+  assert.deepEqual(
+    selectVisibleCourses(courses, ["OLD 100"]).map((c) => c.code),
+    ["CPSC 121", "MATH 100"],
+  );
+  assert.deepEqual(selectVisibleCourses(courses, []).map((c) => c.code), ["CPSC 121", "OLD 100", "MATH 100"]);
+});
+
+test("hideCourseItems: drops items belonging to a hidden course", () => {
+  const items = [{ course: "CPSC 121" }, { course: "OLD 100" }];
+  assert.deepEqual(hideCourseItems(items, ["OLD 100"]).map((i) => i.course), ["CPSC 121"]);
+});
+
+test("mergeItems: keeps distinct (source, url) items and updates matching ones", () => {
+  const base = [{ source: "canvas", url: "https://x/1", title: "Old title" }];
+  const incoming = [
+    { source: "canvas", url: "https://x/1", title: "New title" }, // same identity - replaces
+    { source: "canvas", url: "https://x/2", title: "Different item" }, // new identity - added
+  ];
+  const merged = mergeItems(base, incoming);
+  assert.equal(merged.length, 2);
+  assert.equal(merged.find((i) => i.url === "https://x/1").title, "New title");
 });

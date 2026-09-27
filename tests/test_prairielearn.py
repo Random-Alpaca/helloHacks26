@@ -1,7 +1,12 @@
 import pytest
 from bs4 import BeautifulSoup
 
-from hub.prairielearn import due_from_popover, resolve_campus, to_course, to_item
+from hub.prairielearn import (
+    done_from_credit, done_from_score, due_from_popover, resolve_campus, to_course, to_item,
+    _course_instances, _run,
+)
+
+BASE = "https://us.prairielearn.com"
 
 # Real markup captured from a live UBC PrairieLearn course (CPSC 317, 2026W1).
 OPEN_ROW = """
@@ -30,6 +35,29 @@ NOT_OPEN_ROW = """
   <td class="text-center align-middle">Not started</td>
 </tr>
 """
+# Real markup from the same live course: the credit schedule has fully
+# expired (no popover, no "Available" notice - nothing left in that column
+# at all), and the score never reached 100%.
+CLOSED_ROW = """
+<tr>
+  <td class="align-middle" style="width: 1%"><span data-testid="assessment-set-badge">QUIZ</span></td>
+  <td class="align-middle"><a href="/pl/course_instance/221053/assessment_instance/1">Network Delay</a></td>
+  <td class="text-center align-middle"></td>
+  <td class="text-center align-middle">80%</td>
+</tr>
+"""
+# Real false positive found in review (#15/#71): allowSubmissions=true,
+# credit=0 after the last deadline also empties the credit column, but the
+# assessment was never attempted at all - not finished, just no longer
+# worth points.
+CLOSED_BUT_NEVER_ATTEMPTED_ROW = """
+<tr>
+  <td class="align-middle" style="width: 1%"><span data-testid="assessment-set-badge">PRAC</span></td>
+  <td class="align-middle"><a href="/pl/course_instance/221053/assessment_instance/2">Modern Past Due Practice</a></td>
+  <td class="text-center align-middle"></td>
+  <td class="text-center align-middle">0%</td>
+</tr>
+"""
 
 
 def row(html):
@@ -37,7 +65,7 @@ def row(html):
 
 
 def test_open_assessment_gets_due_from_100pct_tier_and_a_link():
-    i = to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn", "https://us.prairielearn.com")
+    i = to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn", BASE, "221053")
     assert (i.category, i.kind, i.title) == ("task", "assignment", "A Dictionary Client")
     assert i.due.isoformat() == "2026-09-27T23:59:59-07:00"  # PDT, timezone-aware like Canvas's due dates
     assert i.url == "https://us.prairielearn.com/pl/course_instance/221053/assessment_instance/14835025/"
@@ -46,24 +74,83 @@ def test_open_assessment_gets_due_from_100pct_tier_and_a_link():
 def test_due_is_never_naive():
     # A naive due here would crash any code that compares it against
     # datetime.now(timezone.utc) - e.g. Terrace's "Hide overdue" toggle.
-    i = to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn", "https://us.prairielearn.com")
+    i = to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn", BASE, "221053")
     assert i.due.tzinfo is not None
 
 
-def test_not_yet_open_assessment_has_no_due_or_link():
-    i = to_item(row(NOT_OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn", "https://us.prairielearn.com")
+def test_not_yet_open_assessment_has_no_due_and_a_fallback_identity_url():
+    # A blank url here used to mean every unreleased assessment across every
+    # course collided onto one hub.db row, since identity is (source, url).
+    i = to_item(row(NOT_OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn", BASE, "221053")
     assert i.due is None
-    assert i.url == ""
+    assert i.url == "https://us.prairielearn.com/pl/course_instance/221053/assessments#Implementing%20a%20DNS%20Client"
 
 
 def test_group_heading_maps_quiz_and_exam():
-    base = "https://us.prairielearn.com"
-    assert to_item(row(OPEN_ROW), "CPSC 317", "Practice for Quizzes", "prairielearn", base).kind == "quiz"
-    assert to_item(row(OPEN_ROW), "CPSC 317", "Formal Quizzes (repeated for practice)", "prairielearn", base).kind == "exam"
+    assert to_item(row(OPEN_ROW), "CPSC 317", "Practice for Quizzes", "prairielearn", BASE, "221053").kind == "quiz"
+    assert to_item(row(OPEN_ROW), "CPSC 317", "Formal Quizzes (repeated for practice)", "prairielearn", BASE, "221053").kind == "exam"
 
 
 def test_last_tier_with_no_end_date_is_none():
     assert due_from_popover(None) is None
+
+
+def test_a_100_percent_score_is_done():
+    assert to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn", BASE, "221053").done is True
+
+
+def test_not_started_is_not_done():
+    assert to_item(row(NOT_OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn", BASE, "221053").done is False
+
+
+def test_a_partial_score_is_not_done():
+    # Partial credit is still improvable until the assessment closes - only
+    # a 100% score means nothing is left to do here.
+    partial_row = row(OPEN_ROW.replace('">100%</td>', '">85%</td>'))
+    assert done_from_score(partial_row.select("td")) is False
+
+
+def test_done_from_score_handles_a_short_row_without_crashing():
+    assert done_from_score(row(NOT_OPEN_ROW).select("td")[:2]) is None
+
+
+def test_a_closed_assessment_with_no_available_credit_is_done_even_under_100_percent():
+    # Real shape: the credit schedule fully expired (empty 3rd column), and
+    # the score (80%) never reached 100% - done_from_score alone would miss
+    # this, since there's nothing left the student can do to change it.
+    assert to_item(row(CLOSED_ROW), "CPSC 317", "Quizzes", "prairielearn", BASE, "221053").done is True
+
+
+def test_done_from_credit_is_true_only_when_the_column_is_truly_empty():
+    assert done_from_credit(row(CLOSED_ROW).select("td")) is True
+
+
+def test_a_never_attempted_zero_credit_practice_assessment_is_not_done():
+    # The false positive PM review found: allowSubmissions=true, credit=0
+    # after the last deadline also empties the credit column, but nothing
+    # was ever attempted - an empty credit cell alone isn't "done" unless
+    # the score is also nonzero.
+    item = to_item(row(CLOSED_BUT_NEVER_ATTEMPTED_ROW), "CPSC 317", "Quizzes", "prairielearn", BASE, "221053")
+    assert item.done is False
+    assert done_from_credit(row(CLOSED_BUT_NEVER_ATTEMPTED_ROW).select("td")) is False
+    assert done_from_credit(row(NOT_OPEN_ROW).select("td")) is False  # "Available <time>" notice
+    assert done_from_credit(row(OPEN_ROW).select("td")) is False  # still has its popover button
+
+
+def test_done_from_credit_handles_a_short_row_without_crashing():
+    assert done_from_credit(row(NOT_OPEN_ROW).select("td")[:1]) is False
+
+
+def test_mst_is_a_recognized_offset_alongside_pst_and_pdt():
+    popover = OPEN_ROW.replace("(PDT)", "(MST)")
+    i = to_item(row(popover), "CPSC 317", "Programming Assignments", "prairielearn", BASE, "221053")
+    assert i.due.utcoffset().total_seconds() / 3600 == -7
+
+
+def test_unrecognized_timezone_abbreviation_raises_instead_of_silently_using_utc():
+    popover = OPEN_ROW.replace("(PDT)", "(XYZ)")
+    with pytest.raises(ValueError):
+        to_item(row(popover), "CPSC 317", "Programming Assignments", "prairielearn", BASE, "221053")
 
 
 def test_course_title_parsing():
@@ -76,7 +163,7 @@ def test_okanagan_campus_gets_its_own_base_url_and_source():
     # own PrairieLearn instance, not the shared us.prairielearn.com one -
     # each campus needs its own base URL and its own `source`, so the two
     # never collide under the same (source, url) identity.
-    i = to_item(row(OPEN_ROW), "MECH 260", "Programming Assignments", "prairielearn_ok", "https://prairielearn.ok.ubc.ca")
+    i = to_item(row(OPEN_ROW), "MECH 260", "Programming Assignments", "prairielearn_ok", "https://prairielearn.ok.ubc.ca", "221053")
     assert i.source == "prairielearn_ok"
     assert i.url == "https://prairielearn.ok.ubc.ca/pl/course_instance/221053/assessment_instance/14835025/"
 
@@ -116,3 +203,65 @@ def test_resolve_campus_rejects_anything_that_isnt_a_real_https_url(bad):
     # or a non-URL string must fail loudly here, not reach Playwright.
     with pytest.raises(ValueError):
         resolve_campus(bad)
+
+
+class _FakeReq:
+    def __init__(self, html):
+        self.html = html
+
+    def get(self, url):
+        return self
+
+    @property
+    def status(self):
+        return 200
+
+    @property
+    def ok(self):
+        return True
+
+    def text(self):
+        return self.html
+
+
+def test_course_instances_matches_both_student_and_instructor_links():
+    html = """
+    <a href="/pl/course_instance/1">CPSC 317</a>
+    <a href="/pl/course_instance/2/instructor">CPSC 121 (TA)</a>
+    """
+    assert _course_instances(_FakeReq(html), BASE) == [("1", "CPSC 317"), ("2", "CPSC 121 (TA)")]
+
+
+class _FakeMultiPageReq:
+    """Routes by path, keyed the way _get_soup builds them (base + path)."""
+
+    def __init__(self, pages, base=BASE):
+        self.pages = pages
+        self.base = base
+
+    def get(self, url):
+        self.html = self.pages[url[len(self.base):]]
+        return self
+
+    status = 200
+    ok = True
+
+    def text(self):
+        return self.html
+
+
+def test_run_skips_a_course_instance_whose_title_is_not_a_ubc_course_code():
+    # The wider instructor-link matching in _course_instances also picks up
+    # PrairieLearn's own built-in example course, whose title doesn't match a
+    # UBC course code - it used to come through as a phantom "Spring 2015"
+    # course (#15). No assessments page for id 2 in `pages`: if _run ever
+    # fetched it, this test would KeyError instead of just passing.
+    pages = {
+        "/": """
+            <a href="/pl/course_instance/1">CPSC 317: Internet Computing, 2026 Winter Term 1</a>
+            <a href="/pl/course_instance/2/instructor">Spring 2015</a>
+        """,
+        "/pl/course_instance/1/assessments": "<table><tbody></tbody></table>",
+    }
+    courses, items = _run(_FakeMultiPageReq(pages), "prairielearn", BASE)
+    assert [c.code for c in courses] == ["CPSC 317"]

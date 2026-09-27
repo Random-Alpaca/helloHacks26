@@ -35,7 +35,7 @@ Try it:  uv run python -m hub.prairielearn
 """
 import re
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from bs4 import BeautifulSoup
 
@@ -82,7 +82,11 @@ def resolve_campus(campus):
 
 # UBC courses only ever show Pacific time. Fixed offsets, not zoneinfo/pytz:
 # good enough while every course we've seen is UBC; add zones if that changes.
-TZ_OFFSET = {"PST": -8, "PDT": -7}
+# "MST" included for BC's 2027-01-06 permanent-DST tzdata change (see
+# tests/test_db.py): once BC stops changing clocks, tzdata names the resulting
+# fixed UTC-7 offset "MST" (it coincides with Mountain Standard Time), even
+# though it's still what PrairieLearn shows as "Vancouver time".
+TZ_OFFSET = {"PST": -8, "PDT": -7, "MST": -7}
 
 # PrairieLearn groups assessments under headings an instructor names freely
 # ("Programming Assignments", "Tutorial", ...); these are the ones we've seen
@@ -136,31 +140,99 @@ def due_from_popover(popover_html):
     if not m:
         return None
     dt_str, tz = m.groups()
-    return datetime.fromisoformat(dt_str).replace(tzinfo=timezone(timedelta(hours=TZ_OFFSET.get(tz, 0))))
+    if tz not in TZ_OFFSET:
+        # Silently treating an unrecognized abbreviation as UTC used to be a
+        # 7h-off bug waiting to happen (#15) - fail loud instead.
+        raise ValueError(f"unrecognized PrairieLearn timezone abbreviation: {tz!r}")
+    return datetime.fromisoformat(dt_str).replace(tzinfo=timezone(timedelta(hours=TZ_OFFSET[tz])))
 
 
-def to_item(row, course_code, group, campus_key, base):
+_SCORE_RE = re.compile(r"([\d.]+)\s*%")
+
+
+def done_from_score(cells):
+    """PrairieLearn has no submitted/graded flag of its own on this page -
+    the 4th column shows a percentage ("100%") once attempted, or a status
+    like "Not started"/"Not yet released" otherwise. A 100% score is one
+    heuristic for "nothing left to do here" (a lower score is still
+    improvable up until the assessment closes - see done_from_credit for the
+    other case, a closed assessment whose score never reached 100%)."""
+    if len(cells) < 4:
+        return None
+    m = _SCORE_RE.search(cells[3].get_text(strip=True))
+    return m is not None and float(m.group(1)) >= 100
+
+
+def done_from_credit(cells):
+    """Once an assessment's whole credit schedule has expired, the Available
+    Credit column (3rd) shows nothing at all - no popover, no "Available
+    <time>" notice - since there's nothing left that could still change the
+    score. Verified against a real UBC course: several closed assessments
+    show this with a score well under 100% (e.g. 66%, 80%, 85%), which
+    done_from_score alone would miss. A not-yet-open assessment always shows
+    an "Available <time>" message instead, so this never collides with that
+    case.
+
+    An empty credit cell alone isn't enough, though (PM review on #15/#71
+    found this live): PrairieLearn also shows an empty cell for an
+    assessment that still accepts 0%-credit "practice" submissions after its
+    last deadline (`afterLastDeadline.allowSubmissions=true, credit=0`) -
+    that's not finished, just not worth more points anymore. Require a
+    nonzero score too, so a never-attempted assessment in that state stays
+    visible instead of silently disappearing."""
+    if len(cells) < 4:
+        return False
+    credit_cell = cells[2]
+    if credit_cell.find("button") is not None or credit_cell.get_text(strip=True) != "":
+        return False
+    m = _SCORE_RE.search(cells[3].get_text(strip=True))
+    return m is not None and float(m.group(1)) > 0
+
+
+def to_item(row, course_code, group, campus_key, base, ci_id):
     cells = row.select("td")
     link = cells[1].find("a")
     popover = cells[2].find("button")
     kind = KIND_FOR_GROUP.get(group.strip().lower(), "assignment")
+    title = cells[1].get_text(strip=True)
+    # An assessment PrairieLearn hasn't opened yet has no link (module
+    # docstring), so url="" used to be its identity - every unreleased
+    # assessment in every course collapsed onto one hub.db row (#15). Fall
+    # back to the assessments page plus the title, unique enough within a
+    # course and stable across re-fetches until the assessment actually opens.
+    url = f"{base}{link['href']}" if link else f"{base}/pl/course_instance/{ci_id}/assessments#{quote(title)}"
     return Item(
         course=course_code,
         category=category_for(kind),
         kind=kind,
-        title=cells[1].get_text(strip=True),
+        title=title,
         due=due_from_popover(popover["data-bs-content"]) if popover else None,
-        url=f"{base}{link['href']}" if link else "",
+        url=url,
         source=campus_key,
+        done=bool(done_from_score(cells)) or done_from_credit(cells),
     )
 
 
+_CI_LINK = re.compile(r"^/pl/course_instance/(\d+)(?:/instructor)?/?$")
+
+
 def _course_instances(req, base):
-    """[(id, display title)] for every course on the student's home page."""
-    soup = _get_soup(req, "/", base)
-    return [(a["href"].rsplit("/", 1)[1], a.get_text(strip=True))
-            for a in soup.select("a[href^='/pl/course_instance/']")
-            if a["href"].rstrip("/").count("/") == 3]
+    """[(id, display title)] for every course on the student's home page.
+
+    Matches both the student link (.../course_instance/<id>) and the
+    instructor one (.../course_instance/<id>/instructor) - TAs/instructors
+    used to see zero courses because only the student shape matched (#15).
+    # ponytail: this still reads the student Assessments page for everyone
+    (_assessments below), which may not be right for an instructor-only
+    account - untested without a real TA login. Revisit if that's wrong."""
+    soup, seen, out = _get_soup(req, "/", base), set(), []
+    for a in soup.select("a[href^='/pl/course_instance/']"):
+        m = _CI_LINK.match(a["href"])
+        if not m or m[1] in seen:
+            continue
+        seen.add(m[1])
+        out.append((m[1], a.get_text(strip=True)))
+    return out
 
 
 def _assessments(req, ci_id, course_code, campus_key, base):
@@ -171,7 +243,7 @@ def _assessments(req, ci_id, course_code, campus_key, base):
         if heading:
             group = heading.get_text(strip=True)
         else:
-            items.append(to_item(row, course_code, group, campus_key, base))
+            items.append(to_item(row, course_code, group, campus_key, base, ci_id))
     return items
 
 
@@ -187,6 +259,14 @@ def fetch(campus=DEFAULT_CAMPUS):
 def _run(req, campus_key, base):
     courses, items = [], []
     for ci_id, title in _course_instances(req, base):
+        if not COURSE_TITLE.match(title):
+            # ponytail: skip instances that don't look like a UBC course code -
+            # this is also what filters out PrairieLearn's own built-in example
+            # course, which the wider instructor-link matching above now finds
+            # too and would otherwise show up as a phantom "Spring 2015" course
+            # (#15). Upgrade: ask PL for real course metadata if that's ever
+            # exposed, instead of sniffing the title.
+            continue
         course = to_course(ci_id, title)
         courses.append(course)
         items += _assessments(req, ci_id, course.code, campus_key, base)
