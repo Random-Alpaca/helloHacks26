@@ -155,7 +155,15 @@ function CalendarSection({ items, now }) {
   );
 }
 
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind }) {
+const SOURCE_LABELS = {
+  canvas: "Canvas",
+  canvas_feed: "Canvas calendar feed",
+  prairielearn: "PrairieLearn",
+  prairielearn_ok: "PrairieLearn (Okanagan)",
+  prairielearn_custom: "PrairieLearn",
+};
+
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, allCourses, hiddenCourses, onToggleCourseHidden, feedConnected, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
   const [customDomain, setCustomDomain] = useState("");
@@ -197,7 +205,8 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
       await fn();
       await onConnected();
     } catch (e) {
-      setError(`${name}: ${e.message}`);
+      // A person reads this - a human label, never an internal source id.
+      setError(`${SOURCE_LABELS[name] ?? "Connect"}: ${e.message}`);
     } finally {
       setBusy(null);
     }
