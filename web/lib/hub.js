@@ -261,6 +261,36 @@ export async function fetchCanvasFeed(url) {
   return rows.map(normaliseApiItem);
 }
 
+// Hosted store (web/api/sync.py, items.py, session.py) - the extension syncs
+// a student's data under a sync key it generated; the dashboard is handed
+// that key once as a #sync=<key> fragment (fragments never reach server
+// logs), trades it for an httpOnly cookie, and reads rows back with it.
+// Until hosted storage is provisioned those routes answer 503, and every
+// caller here treats any non-200 as "no hosted data" - the dashboard just
+// keeps its existing behaviour.
+export function syncKeyFromHash(hash) {
+  const key = new URLSearchParams((hash || "").replace(/^#/, "")).get("sync");
+  return key && /^[A-Za-z0-9_-]{43,128}$/.test(key) ? key : null;
+}
+
+export async function startHostedSession(key) {
+  const res = await fetch("/api/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key }),
+  });
+  return res.ok;
+}
+
+// {items, courses} from the hosted store, or null when there's no session
+// (401) or no store (503) - never throws for those.
+export async function fetchHostedStore() {
+  const res = await fetch("/api/items", { credentials: "same-origin" });
+  if (!res.ok) return null;
+  const body = await res.json();
+  return { items: (body.items ?? []).map(normaliseApiItem), courses: body.courses ?? [] };
+}
+
 // Completed items never show anywhere, regardless of Hide overdue (matches
 // app.py's df2e178 rule) - applied once so every tab and the Courses tab's
 // per-course lists see the same set.

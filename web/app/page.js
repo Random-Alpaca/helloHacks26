@@ -10,6 +10,7 @@ import {
   fetchAnnouncements,
   fetchCanvasFeed,
   fetchCourses,
+  fetchHostedStore,
   fetchUpcoming,
   formatDue,
   hasItemDueOn,
@@ -25,6 +26,8 @@ import {
   selectNextUp,
   selectVisibleCourses,
   selectVisibleItems,
+  startHostedSession,
+  syncKeyFromHash,
   weekDates,
 } from "../lib/hub";
 import { parseWorkdayCourses } from "../lib/workday";
@@ -406,6 +409,8 @@ export default function App() {
   const [canvasFeedUrl, setCanvasFeedUrl] = useState("");
   const [feedItems, setFeedItems] = useState([]);
   const [feedError, setFeedError] = useState(null);
+  const [storeItems, setStoreItems] = useState([]);
+  const [storeCourses, setStoreCourses] = useState([]);
   const loadRequestId = useRef(0);
   const feedRequestId = useRef(0);
 
@@ -446,6 +451,22 @@ export default function App() {
           // Generic message only - a server error must never put the feed URL (a secret) on screen.
           setFeedError("Couldn't refresh your feed - it may have expired or changed.");
         });
+    }
+    // Hosted store: a #sync=<key> link from the extension becomes an
+    // httpOnly cookie, and the fragment is dropped from the address bar
+    // before anything else happens. Any failure (503 until the store is
+    // provisioned, 401 with no session) silently leaves the dashboard as is.
+    if (!isLocalMode()) {
+      const syncKey = syncKeyFromHash(window.location.hash);
+      if (syncKey) history.replaceState(null, "", window.location.pathname + window.location.search);
+      (syncKey ? startHostedSession(syncKey) : Promise.resolve())
+        .then(fetchHostedStore)
+        .then((store) => {
+          if (!store) return;
+          setStoreItems(store.items);
+          setStoreCourses(store.courses);
+        })
+        .catch(() => {});
     }
   }, []);
   useEffect(() => {
@@ -529,9 +550,9 @@ export default function App() {
   }, [sampleMode]);
 
   const now = new Date();
-  const allCourses = mergeCourses(fetchedCourses, importedCourses);
+  const allCourses = mergeCourses(mergeCourses(fetchedCourses, storeCourses), importedCourses);
   const courses = selectVisibleCourses(allCourses, hiddenCourses);
-  const allItems = mergeItems(items, feedItems);
+  const allItems = mergeItems(mergeItems(items, storeItems), feedItems);
   const activeItems = hideCourseItems(selectActiveItems(allItems), hiddenCourses);
   const doneCount = hideCourseItems(allItems, hiddenCourses).filter(isDone).length;
   const overdueCount = activeItems.filter((item) => isOverdue(item, now)).length;

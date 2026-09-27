@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hideCourseItems, mergeItems, selectConnections, selectVisibleCourses } from "./hub.js";
+import { hideCourseItems, mergeItems, selectConnections, selectVisibleCourses, syncKeyFromHash } from "./hub.js";
 
 test("selectConnections: no data means nothing is connected", () => {
   const connections = selectConnections([], []);
@@ -68,4 +68,14 @@ test("mergeItems: keeps distinct (source, url) items and updates matching ones",
   const merged = mergeItems(base, incoming);
   assert.equal(merged.length, 2);
   assert.equal(merged.find((i) => i.url === "https://x/1").title, "New title");
+});
+
+test("syncKeyFromHash: takes a well-formed #sync key, ignores anything else", () => {
+  const key = "a".repeat(20) + "-_B" + "9".repeat(20); // 43 urlsafe chars
+  assert.equal(syncKeyFromHash(`#sync=${key}`), key);
+  assert.equal(syncKeyFromHash(`#tab=all&sync=${key}`), key);
+  assert.equal(syncKeyFromHash("#sync=short"), null);
+  assert.equal(syncKeyFromHash(`#sync=${key.slice(0, 40)}!!!`), null);
+  assert.equal(syncKeyFromHash(""), null);
+  assert.equal(syncKeyFromHash(undefined), null);
 });
