@@ -262,29 +262,14 @@ function CalendarSection({ items, meetings, now, onToggleItemDone }) {
   );
 }
 
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind }) {
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind, brightspaceCourseCount, onBrightspaceConnected, webworkItemCount, onWebworkConnected }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
   const [customDomain, setCustomDomain] = useState("");
   const [feedUrlInput, setFeedUrlInput] = useState("");
   const [brightspaceUrl, setBrightspaceUrl] = useState("");
-  // hub/brightspace.py's fetch() never returns items (no plain JSON due-date
-  // endpoint was found live - see its module docstring), so unlike every
-  // other provider here, selectConnections' item-count-based "connected"
-  // signal can't represent it truthfully. Track a successful connect's own
-  // course count directly instead - ephemeral (resets on reload), same
-  // spirit as workdayStatus above.
-  const [brightspaceCourseCount, setBrightspaceCourseCount] = useState(null);
   const [webworkUrl, setWebworkUrl] = useState("");
   const [webworkCourseCode, setWebworkCourseCode] = useState("");
-  // Same problem as brightspaceCourseCount above, for a different reason:
-  // hub/webwork.py's own module docstring says a due date only exists for
-  // a *currently open* set, so /api/upcoming (which requires one) can
-  // legitimately return zero of a real, successfully-connected account's
-  // items - verified live: a real account saved 7 real problem sets, every
-  // one closed or not-yet-open, so the item-count signal read 0 the whole
-  // time. Track the connect response's own count directly instead.
-  const [webworkItemCount, setWebworkItemCount] = useState(null);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
   const byId = Object.fromEntries(connections.map((c) => [c.id, c]));
@@ -577,7 +562,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
                 />
                 <AppButton
                   disabled={busy !== null || !webworkUrl || !webworkCourseCode}
-                  onClick={() => run("webwork", async () => setWebworkItemCount((await connectWebWork(webworkUrl, webworkCourseCode)).items))}
+                  onClick={() => run("webwork", async () => onWebworkConnected((await connectWebWork(webworkUrl, webworkCourseCode)).items))}
                   className="toggle-pill"
                 >
                   {busy === "webwork" ? "Signing in…" : webworkItemCount > 0 ? "Reconnect" : "Connect"}
@@ -608,7 +593,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
                 />
                 <AppButton
                   disabled={busy !== null || !brightspaceUrl}
-                  onClick={() => run("brightspace", async () => setBrightspaceCourseCount((await connectBrightspace(brightspaceUrl)).courses))}
+                  onClick={() => run("brightspace", async () => onBrightspaceConnected((await connectBrightspace(brightspaceUrl)).courses))}
                   className="toggle-pill"
                 >
                   {busy === "brightspace" ? "Signing in…" : brightspaceCourseCount > 0 ? "Reconnect" : "Connect"}
@@ -706,6 +691,15 @@ export default function App() {
   const [loadError, setLoadError] = useState(null);
   const [hiddenCourses, setHiddenCourses] = useState([]);
   const [manuallyDoneKeys, setManuallyDoneKeys] = useState([]);
+  // Brightspace/WeBWorK's own "connected" status can't be read back from
+  // /api/upcoming (see hub.js's comment above KNOWN_PROVIDERS) - it has to
+  // be tracked directly off their own connect responses instead. That
+  // state used to live inside SettingsPage itself, which meant it reset to
+  // "not connected" the moment you navigated away and back, even though
+  // the real connection was still there in hub.db - persisted like every
+  // other Connections-tab fact for the same reason canvasFeedUrl is.
+  const [brightspaceCourseCount, setBrightspaceCourseCount] = useState(null);
+  const [webworkItemCount, setWebworkItemCount] = useState(null);
   const [canvasFeedUrl, setCanvasFeedUrl] = useState("");
   const [feedItems, setFeedItems] = useState([]);
   const [feedError, setFeedError] = useState(null);
@@ -741,6 +735,10 @@ export default function App() {
     } catch {
       // ignore malformed/missing storage - keep the default (nothing checked off)
     }
+    const savedBrightspaceCount = localStorage.getItem("gather-brightspace-course-count");
+    if (savedBrightspaceCount !== null) setBrightspaceCourseCount(Number(savedBrightspaceCount));
+    const savedWebworkCount = localStorage.getItem("gather-webwork-item-count");
+    if (savedWebworkCount !== null) setWebworkItemCount(Number(savedWebworkCount));
     setPreferredKinds(readPreferredKindsCookie());
     // The feed URL is a secret (works like a password) - localStorage only,
     // never sent anywhere but /api/feed. Re-fetches automatically on every
@@ -788,6 +786,14 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("gather-manually-done", JSON.stringify(manuallyDoneKeys));
   }, [manuallyDoneKeys]);
+  useEffect(() => {
+    if (brightspaceCourseCount === null) return;
+    localStorage.setItem("gather-brightspace-course-count", String(brightspaceCourseCount));
+  }, [brightspaceCourseCount]);
+  useEffect(() => {
+    if (webworkItemCount === null) return;
+    localStorage.setItem("gather-webwork-item-count", String(webworkItemCount));
+  }, [webworkItemCount]);
 
   function toggleCourseHidden(code, visible) {
     setHiddenCourses((prev) => (visible ? prev.filter((c) => c !== code) : [...prev, code]));
@@ -983,6 +989,10 @@ export default function App() {
               onDisconnectFeed={disconnectCanvasFeed}
               preferredKinds={preferredKinds}
               onTogglePreferredKind={togglePreferredKind}
+              brightspaceCourseCount={brightspaceCourseCount}
+              onBrightspaceConnected={setBrightspaceCourseCount}
+              webworkItemCount={webworkItemCount}
+              onWebworkConnected={setWebworkItemCount}
             />
           ) : activeNav === "Schedule" ? (
             <section className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-card)]">
