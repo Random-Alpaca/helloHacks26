@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hideCourseItems, selectConnections, selectVisibleCourses } from "./hub.js";
+import { hideCourseItems, mergeItems, selectConnections, selectVisibleCourses } from "./hub.js";
 
 test("selectConnections: no data means nothing is connected", () => {
   const connections = selectConnections([], []);
@@ -57,4 +57,15 @@ test("selectVisibleCourses: drops hidden courses, keeps everything else", () => 
 test("hideCourseItems: drops items belonging to a hidden course", () => {
   const items = [{ course: "CPSC 121" }, { course: "OLD 100" }];
   assert.deepEqual(hideCourseItems(items, ["OLD 100"]).map((i) => i.course), ["CPSC 121"]);
+});
+
+test("mergeItems: keeps distinct (source, url) items and updates matching ones", () => {
+  const base = [{ source: "canvas", url: "https://x/1", title: "Old title" }];
+  const incoming = [
+    { source: "canvas", url: "https://x/1", title: "New title" }, // same identity - replaces
+    { source: "canvas", url: "https://x/2", title: "Different item" }, // new identity - added
+  ];
+  const merged = mergeItems(base, incoming);
+  assert.equal(merged.length, 2);
+  assert.equal(merged.find((i) => i.url === "https://x/1").title, "New title");
 });

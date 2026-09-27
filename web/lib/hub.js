@@ -226,6 +226,41 @@ export function mergeCourses(base, incoming) {
   return Array.from(byCode.values());
 }
 
+// Merge items by (source, url) - rule 4's identity - the same role
+// mergeCourses plays for Workday's imported courses, here for the Canvas
+// calendar-feed's fetched items (#47) sitting alongside whatever
+// fetchUpcoming() already loaded.
+export function mergeItems(base, incoming) {
+  const byKey = new Map(base.map((i) => [`${i.source} ${i.url}`, i]));
+  for (const i of incoming) {
+    byKey.set(`${i.source} ${i.url}`, i);
+  }
+  return Array.from(byKey.values());
+}
+
+// Canvas calendar-feed connect (#47) - works with no local backend at all,
+// so it's the only Canvas path that also works on the hosted Vercel site.
+// The feed URL is a secret (works like a password): kept in the browser's
+// own localStorage only, sent straight to /api/feed (Jacky's route, still
+// landing - see the board), never logged. Response shape isn't final yet;
+// this accepts either a bare item array or {items: [...]}.
+export async function fetchCanvasFeed(url) {
+  // Local mode's /api/feed lives on hub/api.py (a different origin, :8000),
+  // not this page's own origin - same reason every other local-mode call
+  // here goes through apiBase(). Hosted mode has no separate API origin
+  // (Vercel serves /api/feed itself), so the relative path is correct there.
+  const base = apiBase();
+  const res = await fetch(base ? `${base}/api/feed` : "/api/feed", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `POST /api/feed failed: ${res.status}`);
+  const rows = Array.isArray(body) ? body : (body.items ?? []);
+  return rows.map(normaliseApiItem);
+}
+
 // Completed items never show anywhere, regardless of Hide overdue (matches
 // app.py's df2e178 rule) - applied once so every tab and the Courses tab's
 // per-course lists see the same set.
