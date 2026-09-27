@@ -17,7 +17,7 @@ _URGENCY_ORDER = ("overdue", "critical", "high", "medium", "low")
 
 def sort_items(rows, now=None):
     """Sort hub.db.upcoming() rows - (code, category, kind, title, due, url,
-    done) - most urgent first. Ties break by due date."""
+    done, source) - most urgent first. Ties break by due date."""
 
     def key(row):
         due = datetime.fromisoformat(row[4])
