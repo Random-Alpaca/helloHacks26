@@ -73,24 +73,42 @@ function normaliseApiItem(row, i) {
     title: row.title,
     due: row.due,
     url: row.url,
+    source: row.source,
     done: row.done ?? null,
     urgency: row.urgency ?? undefined,
     status: row.status ?? undefined,
   };
 }
 
-export async function fetchUpcoming() {
+// useSample forces sample data even when a local API is configured - this is
+// the "Sample data" toggle (app.py parity), not just the env var. The env
+// var controls whether local mode is *possible* at all (and so whether the
+// toggle/Connect buttons show); the toggle controls what's actually fetched.
+export async function fetchUpcoming(useSample) {
   const base = apiBase();
-  if (!base) return sampleItems();
+  if (!base || useSample) return sampleItems();
   const res = await fetch(`${base}/api/upcoming`);
   if (!res.ok) throw new Error(`GET /api/upcoming failed: ${res.status}`);
   const rows = await res.json();
   return rows.map(normaliseApiItem);
 }
 
-export async function fetchCourses() {
+// Announcements never carry a due date (they're informational, not a task -
+// see hub/canvas.py's to_item()), so they're a separate feed from
+// fetchUpcoming() rather than items mixed into it. Sample mode has none -
+// none of SAMPLE_ROWS is announcement-shaped, so there's nothing to fake.
+export async function fetchAnnouncements(useSample) {
   const base = apiBase();
-  if (!base) return SAMPLE_COURSES;
+  if (!base || useSample) return [];
+  const res = await fetch(`${base}/api/announcements`);
+  if (!res.ok) throw new Error(`GET /api/announcements failed: ${res.status}`);
+  const rows = await res.json();
+  return rows.map(normaliseApiItem);
+}
+
+export async function fetchCourses(useSample) {
+  const base = apiBase();
+  if (!base || useSample) return SAMPLE_COURSES;
   const res = await fetch(`${base}/api/courses`);
   if (!res.ok) throw new Error(`GET /api/courses failed: ${res.status}`);
   return res.json();
@@ -110,6 +128,32 @@ export async function connectPrairieLearn() {
   const res = await fetch(`${base}/api/connect/prairielearn`, { method: "POST" });
   if (!res.ok) throw new Error(`POST /api/connect/prairielearn failed: ${res.status}`);
   return res.json();
+}
+
+export async function connectPrairieLearnOk() {
+  const base = apiBase();
+  if (!base) throw new Error("connectPrairieLearnOk() only works in local mode");
+  const res = await fetch(`${base}/api/connect/prairielearn_ok`, { method: "POST" });
+  if (!res.ok) throw new Error(`POST /api/connect/prairielearn_ok failed: ${res.status}`);
+  return res.json();
+}
+
+// For a PrairieLearn instance we don't have a quick-connect button for -
+// any department can self-host their own (hub/prairielearn.py's
+// resolve_campus() accepts a full URL, not just a known key). `domain`
+// should be a bare "https://..." origin; the backend validates and rejects
+// anything else before it ever reaches a real login window.
+export async function connectPrairieLearnCustom(domain) {
+  const base = apiBase();
+  if (!base) throw new Error("connectPrairieLearnCustom() only works in local mode");
+  const res = await fetch(`${base}/api/connect/prairielearn_custom`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `POST /api/connect/prairielearn_custom failed: ${res.status}`);
+  return body;
 }
 
 // Sort by urgency (matches hub.logic.sort_items's order) when the backend
@@ -139,4 +183,142 @@ export function isOverdue(item, now) {
 export function isDone(item) {
   if (item.status) return item.status === "done";
   return Boolean(item.done);
+}
+
+// Display only - app.py capitalises urgency/status labels ("Overdue", not
+// "overdue"); values themselves stay lowercase everywhere else (comparisons,
+// URGENCY_ORDER, the backend's own strings).
+export function displayLabel(value) {
+  if (!value) return "—";
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+// Display only - same category as displayLabel: formats a raw value (an
+// ISO due date) for a person to read, decides nothing.
+export function formatDue(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("en-CA", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+// --- Processing layer -------------------------------------------------
+// Everything below is pure: given state, compute what to render. page.js
+// owns *when* state changes (fetch, toggle, import); this owns *what the
+// data means* once you have it. Neither of these functions touches React,
+// fetch, or the DOM - they're plain data in, data out, so they're testable
+// on their own and can't reach back into component state by accident.
+
+// Merge courses by code - used both to combine fetched + imported courses
+// for rendering, and to fold a fresh import into what's already imported.
+// Workday never carries a grade, so an existing one (e.g. from Canvas)
+// isn't blanked out by a re-import.
+export function mergeCourses(base, incoming) {
+  const byCode = new Map(base.map((c) => [c.code, c]));
+  for (const c of incoming) {
+    const existing = byCode.get(c.code);
+    byCode.set(c.code, existing ? { ...existing, ...c, grade: c.grade ?? existing.grade } : c);
+  }
+  return Array.from(byCode.values());
+}
+
+// Completed items never show anywhere, regardless of Hide overdue (matches
+// app.py's df2e178 rule) - applied once so every tab and the Courses tab's
+// per-course lists see the same set.
+export function selectActiveItems(items) {
+  return items.filter((item) => !isDone(item));
+}
+
+// A hidden course (Settings - for the old/inactive enrollments Canvas keeps
+// listing) disappears everywhere: the sidebar, filter chips, Courses tab,
+// and any of its items in every other view - not just its own row. This is
+// display-only, client-side (hiddenCourses is never sent anywhere) - the
+// course and its items stay exactly as fetched in hub.db.
+export function selectVisibleCourses(courses, hiddenCourses) {
+  return courses.filter((c) => !hiddenCourses.includes(c.code));
+}
+
+export function hideCourseItems(items, hiddenCourses) {
+  return items.filter((item) => !hiddenCourses.includes(item.course));
+}
+
+// The flat item list for a given tab/toggle/limit combination. Expects
+// already-active (non-done) items - see selectActiveItems.
+export function selectVisibleItems(items, { tab, hideOverdue, showN, now }) {
+  return sortItems(items)
+    .filter((item) => tab === "all" || tab === "courses" || item.category === tab)
+    .filter((item) => !hideOverdue || !isOverdue(item, now))
+    .slice(0, showN);
+}
+
+// One course's own items, ranked - what the Courses tab's per-course table
+// needs. Expects already-active (non-done) items - see selectActiveItems.
+export function selectCourseItems(items, courseCode) {
+  return sortItems(items.filter((item) => item.course === courseCode));
+}
+
+// The single most urgent active item, or null. Expects already-active
+// (non-done) items - see selectActiveItems.
+export function selectNextUp(items) {
+  return sortItems(items)[0] ?? null;
+}
+
+// The 7 dates (Mon-Sun) of the week containing `now` - what a calendar-week
+// widget needs, computed rather than hardcoded so it's never stale.
+export function weekDates(now) {
+  const day = (now.getDay() + 6) % 7; // Mon=0 .. Sun=6
+  const monday = new Date(now);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(monday.getDate() - day);
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return d;
+  });
+}
+
+// Whether any active item is due on the given calendar date (local time).
+export function hasItemDueOn(items, date) {
+  return items.some((item) => item.due && sameDay(new Date(item.due), date));
+}
+
+function sameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+// What Settings' Connections list needs: one row per known provider, derived
+// from the data actually on hand rather than a separately-tracked "connected"
+// flag (sample data never sets item.source, so it correctly shows as
+// disconnected everywhere). Workday isn't a login - it's a file the student
+// already has - so "connected" means "imported this session", not "logged in".
+const KNOWN_PROVIDERS = [
+  { id: "canvas", label: "Canvas" },
+  { id: "prairielearn", label: "PrairieLearn" },
+  { id: "prairielearn_ok", label: "PrairieLearn (Okanagan)" },
+];
+
+function countOf(n, noun) {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+export function selectConnections(items, importedCourses) {
+  const countBySource = (source) => items.filter((item) => item.source === source).length;
+  const rows = KNOWN_PROVIDERS.map(({ id, label }) => ({ id, label, connected: countBySource(id) > 0, detail: countOf(countBySource(id), "item") }));
+
+  // Any other source is a PrairieLearn instance a student pasted in
+  // directly (hub/prairielearn.py's resolve_campus() accepts one) - a
+  // hardcoded list can never cover every self-hosted instance, so these
+  // show up dynamically instead of needing their own KNOWN_PROVIDERS entry.
+  const knownIds = new Set(KNOWN_PROVIDERS.map((p) => p.id));
+  const customSources = [...new Set(items.map((item) => item.source))].filter((s) => s && !knownIds.has(s));
+  for (const source of customSources) {
+    rows.push({ id: source, label: `PrairieLearn (${source})`, connected: true, detail: countOf(countBySource(source), "item") });
+  }
+
+  rows.push({ id: "workday", label: "Workday", connected: importedCourses.length > 0, detail: `${countOf(importedCourses.length, "course")} imported` });
+  return rows;
 }

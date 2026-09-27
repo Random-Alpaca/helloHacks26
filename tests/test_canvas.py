@@ -38,6 +38,16 @@ def test_to_undated_item():
     assert i.url == "https://canvas.ubc.ca/courses/7/assignments/9"
 
 
+def test_announcement_has_no_due_date():
+    # plannable_date on an announcement is its post date, not a deadline -
+    # verified against a real planner/items response. Using it as `due`
+    # made every announcement look permanently overdue.
+    announcement = to_item({"plannable_type": "announcement", "plannable_date": "2026-01-05T12:00:00Z",
+                             "plannable": {"title": "Welcome!"}, "html_url": "/courses/7/announcements/1"}, {})
+    assert announcement.due is None
+    assert announcement.category == "task"
+
+
 def test_done_from_submissions():
     # Real shapes seen from planner/items: a dict for anything gradeable,
     # a bare `false` for announcements/events - nothing to report there.
