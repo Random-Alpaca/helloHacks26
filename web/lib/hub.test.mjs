@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hideCourseItems, mergeItems, monthGrid, parsePreferredKinds, selectConnections, selectItemsDueOn, selectVisibleCourses, sortItems } from "./hub.js";
+import { hideCourseItems, mergeItems, monthGrid, parsePreferredKinds, selectConnections, selectItemsDueOn, selectVisibleCourses, sortItems, syncKeyFromHash } from "./hub.js";
 
 test("selectConnections: no data means nothing is connected", () => {
   const connections = selectConnections([], []);
@@ -126,4 +126,14 @@ test("sortItems: no preferredKinds argument behaves exactly as before (due-date 
   const sorted = sortItems(items);
   assert.equal(sorted[0].id, 2);
   assert.equal(sorted[1].id, 1);
+});
+
+test("syncKeyFromHash: takes a well-formed #sync key, ignores anything else", () => {
+  const key = "a".repeat(20) + "-_B" + "9".repeat(20); // 43 urlsafe chars
+  assert.equal(syncKeyFromHash(`#sync=${key}`), key);
+  assert.equal(syncKeyFromHash(`#tab=all&sync=${key}`), key);
+  assert.equal(syncKeyFromHash("#sync=short"), null);
+  assert.equal(syncKeyFromHash(`#sync=${key.slice(0, 40)}!!!`), null);
+  assert.equal(syncKeyFromHash(""), null);
+  assert.equal(syncKeyFromHash(undefined), null);
 });
