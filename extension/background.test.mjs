@@ -102,3 +102,33 @@ test("the transport runs another registered provider without provider-specific c
   assert.equal(injections[0].target.tabId, 9);
   assert.equal(injections[0].files[0], "providers/moodle.js");
 });
+
+test("a configured school origin controls custom-provider injection and sender validation", async () => {
+  const handlers = {};
+  const injections = [];
+  const stored = {providerOrigins: {blackboard: "https://bb.example.edu"}};
+  const chrome = {
+    storage: {local: {setAccessLevel: async () => {}, get: async () => stored,
+                      set: async value => Object.assign(stored, value)}},
+    runtime: {onInstalled: {addListener: () => {}},
+              onMessage: {addListener: fn => { handlers.message = fn; }}},
+    alarms: {create: () => {}, onAlarm: {addListener: () => {}}},
+    tabs: {query: async query => {
+      assert.equal(query.url, "https://bb.example.edu/*");
+      return [{id: 4, status: "complete"}];
+    }, create: async () => {}},
+    scripting: {executeScript: async args => injections.push(args)}
+  };
+  const context = {chrome, URL, fetch: async () => { throw Error("unexpected upload"); },
+    HUB_PROVIDERS: [{id: "blackboard", label: "Blackboard", customOrigin: true,
+      captureFile: "providers/blackboard.js"}], importScripts: () => {}};
+  vm.runInNewContext(fs.readFileSync(new URL("./background.js", import.meta.url), "utf8"), context);
+  const result = await new Promise(resolve =>
+    handlers.message({type: "SYNC_NOW", provider: "blackboard"}, {}, resolve));
+  assert.equal(result.ok, true);
+  assert.equal(injections[0].files[0], "providers/blackboard.js");
+  handlers.message({type: "CAPTURE_FAILED", source: "blackboard", error: "fake"},
+    {tab: {url: "https://other.example/"}}, () => {});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.notEqual(stored.syncStatus, "fake");
+});

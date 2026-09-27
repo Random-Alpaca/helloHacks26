@@ -13,16 +13,34 @@ async function setStatus(message) {
 async function syncNow(providerId, interactive = true) {
   const provider = PROVIDERS.find(p => p.id === providerId);
   if (!provider) throw new Error("This provider has no verified extension adapter");
-  const tabs = await chrome.tabs.query({url: provider.tabPattern});
+  const {providerOrigins = {}} = await chrome.storage.local.get("providerOrigins");
+  const origin = provider.customOrigin ? providerOrigins[provider.id] : provider.origin;
+  if (!origin) {
+    if (interactive) await setStatus(`Enter your ${provider.label} site URL in the extension popup.`);
+    return;
+  }
+  const tabs = await chrome.tabs.query({url: `${origin}/*`});
   const tab = tabs.find(t => t.status === "complete" && t.id);
   if (!tab) {
     if (interactive) {
-      await chrome.tabs.create({url: `${provider.origin}/`});
+      await chrome.tabs.create({url: `${origin}/`});
       await setStatus(`${provider.label} opened. Sign in there, then press Sync again.`);
     }
     return;
   }
   await setStatus(`Reading ${provider.label} tasks…`);
+  if (provider.pageSessionPath) {
+    const [{result: pageSessionValue}] = await chrome.scripting.executeScript({
+      target: {tabId: tab.id}, world: "MAIN",
+      func: path => path.reduce((value, key) => value?.[key], globalThis),
+      args: [provider.pageSessionPath]
+    });
+    if (typeof pageSessionValue !== "string" || !/^[a-zA-Z0-9]{6,128}$/.test(pageSessionValue)) {
+      throw new Error(`${provider.label} session key unavailable. Sign in and reopen its dashboard.`);
+    }
+    await chrome.scripting.executeScript({target: {tabId: tab.id},
+      func: key => { globalThis.__hubPageSessionValue = key; }, args: [pageSessionValue]});
+  }
   await chrome.scripting.executeScript({target: {tabId: tab.id}, files: [provider.captureFile]});
 }
 
@@ -48,12 +66,16 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   if (message?.type !== "CAPTURE_READY" && message?.type !== "CAPTURE_FAILED") return;
   const providerId = message.type === "CAPTURE_READY" ? message.capture?.source : message.source;
   const provider = PROVIDERS.find(p => p.id === providerId);
-  if (!provider || !sender.tab?.url || new URL(sender.tab.url).origin !== provider.origin) return;
-  if (message.type === "CAPTURE_FAILED") {
-    setStatus(message.error || `${provider.label} sync failed`);
-    return;
-  }
+  if (!provider || !sender.tab?.url) return;
+  const senderOrigin = new URL(sender.tab.url).origin;
   (async () => {
+    const {providerOrigins = {}} = await chrome.storage.local.get("providerOrigins");
+    const allowedOrigin = provider.customOrigin ? providerOrigins[provider.id] : provider.origin;
+    if (senderOrigin !== allowedOrigin || message.capture?.origin && message.capture.origin !== allowedOrigin) return;
+    if (message.type === "CAPTURE_FAILED") {
+      await setStatus(message.error || `${provider.label} sync failed`);
+      return;
+    }
     const {latestCaptures = {}} = await chrome.storage.local.get("latestCaptures");
     latestCaptures[provider.id] = message.capture;
     await chrome.storage.local.set({latestCaptures});

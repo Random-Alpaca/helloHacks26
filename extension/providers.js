@@ -2,7 +2,13 @@
    popup use this registry without branching on a provider name. */
 const HUB_PROVIDERS = Object.freeze([
   {id: "canvas", label: "Canvas", origin: "https://canvas.ubc.ca",
-   tabPattern: "https://canvas.ubc.ca/*", captureFile: "providers/canvas.js"}
+   tabPattern: "https://canvas.ubc.ca/*", captureFile: "providers/canvas.js"},
+  {id: "moodle", label: "Moodle (experimental)", customOrigin: true,
+   captureFile: "providers/moodle.js", pageSessionPath: ["M", "cfg", "sesskey"]},
+  {id: "blackboard", label: "Blackboard (experimental, courses only)", customOrigin: true,
+   captureFile: "providers/blackboard.js"},
+  {id: "piazza", label: "Piazza (experimental)", origin: "https://piazza.com",
+   tabPattern: "https://piazza.com/*", captureFile: "providers/piazza.js"}
 ]);
 globalThis.HUB_PROVIDERS = HUB_PROVIDERS;
 if (typeof module !== "undefined") module.exports = {HUB_PROVIDERS};
