@@ -1,6 +1,6 @@
 from bs4 import BeautifulSoup
 
-from hub.prairielearn import done_from_score, due_from_popover, to_course, to_item
+from hub.prairielearn import done_from_credit, done_from_score, due_from_popover, to_course, to_item
 
 # Real markup captured from a live UBC PrairieLearn course (CPSC 317, 2026W1).
 OPEN_ROW = """
@@ -27,6 +27,17 @@ NOT_OPEN_ROW = """
   <td class="align-middle"><span class="text-muted">Implementing a DNS Client</span></td>
   <td class="text-center align-middle"><span class="text-muted">Available 09:00, Mon, Sep 28</span></td>
   <td class="text-center align-middle">Not started</td>
+</tr>
+"""
+# Real markup from the same live course: the credit schedule has fully
+# expired (no popover, no "Available" notice - nothing left in that column
+# at all), and the score never reached 100%.
+CLOSED_ROW = """
+<tr>
+  <td class="align-middle" style="width: 1%"><span data-testid="assessment-set-badge">QUIZ</span></td>
+  <td class="align-middle"><a href="/pl/course_instance/221053/assessment_instance/1">Network Delay</a></td>
+  <td class="text-center align-middle"></td>
+  <td class="text-center align-middle">80%</td>
 </tr>
 """
 
@@ -81,6 +92,23 @@ def test_a_partial_score_is_not_done():
 
 def test_done_from_score_handles_a_short_row_without_crashing():
     assert done_from_score(row(NOT_OPEN_ROW).select("td")[:2]) is None
+
+
+def test_a_closed_assessment_with_no_available_credit_is_done_even_under_100_percent():
+    # Real shape: the credit schedule fully expired (empty 3rd column), and
+    # the score (80%) never reached 100% - done_from_score alone would miss
+    # this, since there's nothing left the student can do to change it.
+    assert to_item(row(CLOSED_ROW), "CPSC 317", "Quizzes").done is True
+
+
+def test_done_from_credit_is_true_only_when_the_column_is_truly_empty():
+    assert done_from_credit(row(CLOSED_ROW).select("td")) is True
+    assert done_from_credit(row(NOT_OPEN_ROW).select("td")) is False  # "Available <time>" notice
+    assert done_from_credit(row(OPEN_ROW).select("td")) is False  # still has its popover button
+
+
+def test_done_from_credit_handles_a_short_row_without_crashing():
+    assert done_from_credit(row(NOT_OPEN_ROW).select("td")[:1]) is False
 
 
 def test_course_title_parsing():
