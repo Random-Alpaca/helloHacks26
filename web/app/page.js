@@ -27,6 +27,7 @@ import {
   selectConnections,
   selectCourseItems,
   selectItemsDueOn,
+  selectCurrentTermMeetings,
   selectDaySchedule,
   selectNextUp,
   selectVisibleCourses,
@@ -74,7 +75,7 @@ const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 // A recurring weekly timetable (#85) - deliberately not tied to any specific
 // calendar week, unlike the Calendar tab's month grid: a Meeting has no
 // single date, just a day-of-week + time slot that repeats all term.
-function ScheduleView({ meetings }) {
+function ScheduleView({ meetings, now }) {
   if (meetings.length === 0) {
     return (
       <div className="p-10 text-center text-sm text-[var(--muted)]">
@@ -82,10 +83,22 @@ function ScheduleView({ meetings }) {
       </div>
     );
   }
+  // A real Workday export carries every term the student's ever had a
+  // schedule for (Term 1 and Term 2 both show up in the same file) - only
+  // show what's actually running right now, or a Term 1 course that ended
+  // weeks ago stays mixed in with current Term 2 ones.
+  const currentMeetings = selectCurrentTermMeetings(meetings, now);
+  if (currentMeetings.length === 0) {
+    return (
+      <div className="p-10 text-center text-sm text-[var(--muted)]">
+        No classes running right now - {meetings.length} meeting{meetings.length === 1 ? "" : "s"} imported, but none in the current term.
+      </div>
+    );
+  }
   return (
     <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-7 sm:p-6">
       {WEEKDAY_CODES.map((code, i) => {
-        const dayMeetings = meetings
+        const dayMeetings = currentMeetings
           .filter((m) => m.days.includes(code))
           .sort((a, b) => a.startTime.localeCompare(b.startTime));
         return (
@@ -882,7 +895,7 @@ export default function App() {
                 <div className="text-xl font-bold tracking-tight">Weekly schedule</div>
                 <div className="mt-1 text-sm text-[var(--muted)]">Your recurring class meetings, from Workday</div>
               </div>
-              <ScheduleView meetings={meetings} />
+              <ScheduleView meetings={meetings} now={now} />
             </section>
           ) : (
           <>

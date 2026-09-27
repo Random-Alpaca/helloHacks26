@@ -451,14 +451,24 @@ function localISODate(date) {
   return `${y}-${m}-${d}`;
 }
 
+// A real Workday export carries every term the student has ever had a
+// schedule for (Term 1 and Term 2 both show up in the same "Meeting
+// Patterns" column), each meeting tagged with its own real term_start/
+// term_end - so a weekly-template view (the Schedule tab) needs this filter
+// just as much as a specific clicked date does, or a Term 1 course that
+// ended weeks ago still shows up mixed in with current Term 2 ones.
+export function selectCurrentTermMeetings(meetings, now) {
+  const iso = localISODate(now);
+  return meetings.filter((m) => iso >= m.termStart && iso <= m.termEnd);
+}
+
 // A recurring class Meeting has no single date, just a day-of-week + a term
 // range - this is the Calendar page's per-day equivalent of selectItemsDueOn,
 // for the Workday schedule side panel on a clicked day.
 export function selectMeetingsOn(meetings, date) {
   const code = JS_DAY_TO_CODE[date.getDay()];
-  const iso = localISODate(date);
-  return meetings
-    .filter((m) => m.days.includes(code) && iso >= m.termStart && iso <= m.termEnd)
+  return selectCurrentTermMeetings(meetings, date)
+    .filter((m) => m.days.includes(code))
     .sort((a, b) => a.startTime.localeCompare(b.startTime));
 }
 

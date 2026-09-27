@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hideCourseItems, isDone, itemKey, mergeItems, mergeMeetings, monthGrid, parsePreferredKinds, selectActiveItems, selectConnections, selectDaySchedule, selectItemsDueOn, selectMeetingsOn, selectVisibleCourses, sortItems } from "./hub.js";
+import { hideCourseItems, isDone, itemKey, mergeItems, mergeMeetings, monthGrid, parsePreferredKinds, selectActiveItems, selectConnections, selectCurrentTermMeetings, selectDaySchedule, selectItemsDueOn, selectMeetingsOn, selectVisibleCourses, sortItems } from "./hub.js";
 
 test("selectConnections: no data means nothing is connected", () => {
   const connections = selectConnections([], []);
@@ -151,6 +151,24 @@ test("selectMeetingsOn: excludes a matching weekday outside the meeting's term r
   const afterTerm = new Date(2026, 11, 14); // a Monday, but after termEnd
   assert.deepEqual(selectMeetingsOn(meetings, beforeTerm), []);
   assert.deepEqual(selectMeetingsOn(meetings, afterTerm), []);
+});
+
+test("selectCurrentTermMeetings: separates Term 1 from Term 2 by whether `now` falls in each meeting's own term", () => {
+  // A real Workday export carries every term a student's ever had a
+  // schedule for in the same file - Term 1 and Term 2 courses must not
+  // show up mixed together once Term 1 has ended.
+  const term1 = { course: "CPSC 121", kind: "lecture", days: ["MO"], startTime: "10:00", endTime: "11:00", termStart: "2026-09-08", termEnd: "2026-12-05" };
+  const term2 = { course: "CPSC 213", kind: "lecture", days: ["MO"], startTime: "10:00", endTime: "11:00", termStart: "2027-01-11", termEnd: "2027-04-09" };
+  const meetings = [term1, term2];
+
+  const duringTerm1 = new Date(2026, 9, 14);
+  assert.deepEqual(selectCurrentTermMeetings(meetings, duringTerm1), [term1]);
+
+  const duringTerm2 = new Date(2027, 1, 8);
+  assert.deepEqual(selectCurrentTermMeetings(meetings, duringTerm2), [term2]);
+
+  const betweenTerms = new Date(2026, 11, 20); // after Term 1 ends, before Term 2 starts
+  assert.deepEqual(selectCurrentTermMeetings(meetings, betweenTerms), []);
 });
 
 test("selectDaySchedule: weaves that day's classes and due items into one chronological list", () => {
