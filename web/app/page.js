@@ -17,6 +17,7 @@ import {
   isDone,
   isLocalMode,
   isOverdue,
+  itemKey,
   mergeItems,
   mergeMeetings,
   monthGrid,
@@ -133,7 +134,7 @@ const MONTH_WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 // date, plus the clicked day's items below. Owns its own displayed-month and
 // selected-day state rather than lifting it into App(), since nothing else
 // in the app needs to know which day is selected here.
-function CalendarSection({ items, meetings, now }) {
+function CalendarSection({ items, meetings, now, onToggleItemDone }) {
   const [monthDate, setMonthDate] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
   const [selectedDate, setSelectedDate] = useState(null);
 
@@ -222,11 +223,19 @@ function CalendarSection({ items, meetings, now }) {
                       {entry.meeting.location && <div className="truncate text-[0.7rem] text-[var(--muted)]">{entry.meeting.location}</div>}
                     </div>
                   ) : (
-                    <a key={idx} href={entry.item.url} className="block rounded-lg border border-[var(--line)] bg-[var(--surface)] p-2.5">
-                      <div className="truncate text-xs font-bold">{entry.item.title}</div>
-                      <div className="mt-0.5 text-[0.7rem] text-[var(--muted)]">{entry.item.kind} &middot; due {entry.time}</div>
-                      <div className="truncate text-[0.7rem] text-[var(--muted)]">{entry.item.course}</div>
-                    </a>
+                    <div key={idx} className="flex items-start gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-2.5">
+                      <input
+                        type="checkbox"
+                        aria-label={`Mark "${entry.item.title}" as done`}
+                        onChange={() => onToggleItemDone(entry.item)}
+                        className="mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--accent)]"
+                      />
+                      <a href={entry.item.url} className="min-w-0 flex-1">
+                        <div className="truncate text-xs font-bold">{entry.item.title}</div>
+                        <div className="mt-0.5 text-[0.7rem] text-[var(--muted)]">{entry.item.kind} &middot; due {entry.time}</div>
+                        <div className="truncate text-[0.7rem] text-[var(--muted)]">{entry.item.course}</div>
+                      </a>
+                    </div>
                   ),
                 )
               )}
@@ -588,6 +597,7 @@ export default function App() {
   const [meetings, setMeetings] = useState([]);
   const [loadError, setLoadError] = useState(null);
   const [hiddenCourses, setHiddenCourses] = useState([]);
+  const [manuallyDoneKeys, setManuallyDoneKeys] = useState([]);
   const [canvasFeedUrl, setCanvasFeedUrl] = useState("");
   const [feedItems, setFeedItems] = useState([]);
   const [feedError, setFeedError] = useState(null);
@@ -613,6 +623,15 @@ export default function App() {
       if (Array.isArray(saved)) setHiddenCourses(saved);
     } catch {
       // ignore malformed/missing storage - keep the default (nothing hidden)
+    }
+    try {
+      // A student's own "I did this" checkbox (#98) - purely local, never
+      // sent anywhere, and never changes what Canvas/PrairieLearn/Workday
+      // themselves think happened.
+      const saved = JSON.parse(localStorage.getItem("gather-manually-done"));
+      if (Array.isArray(saved)) setManuallyDoneKeys(saved);
+    } catch {
+      // ignore malformed/missing storage - keep the default (nothing checked off)
     }
     setPreferredKinds(readPreferredKindsCookie());
     // The feed URL is a secret (works like a password) - localStorage only,
@@ -658,9 +677,17 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("gather-hidden-courses", JSON.stringify(hiddenCourses));
   }, [hiddenCourses]);
+  useEffect(() => {
+    localStorage.setItem("gather-manually-done", JSON.stringify(manuallyDoneKeys));
+  }, [manuallyDoneKeys]);
 
   function toggleCourseHidden(code, visible) {
     setHiddenCourses((prev) => (visible ? prev.filter((c) => c !== code) : [...prev, code]));
+  }
+
+  function toggleItemDone(item) {
+    const key = itemKey(item);
+    setManuallyDoneKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
   }
 
   async function connectCanvasFeed(url) {
@@ -729,8 +756,8 @@ export default function App() {
   const allCourses = fetchedCourses;
   const courses = selectVisibleCourses(allCourses, hiddenCourses);
   const allItems = mergeItems(items, feedItems);
-  const activeItems = hideCourseItems(selectActiveItems(allItems), hiddenCourses);
-  const doneCount = hideCourseItems(allItems, hiddenCourses).filter(isDone).length;
+  const activeItems = hideCourseItems(selectActiveItems(allItems, manuallyDoneKeys), hiddenCourses);
+  const doneCount = hideCourseItems(allItems, hiddenCourses).filter((item) => isDone(item, manuallyDoneKeys)).length;
   const overdueCount = activeItems.filter((item) => isOverdue(item, now)).length;
   const dueThisWeekCount = activeItems.filter((item) => {
     if (!item.due) return false;
@@ -921,6 +948,12 @@ export default function App() {
                   <div>
                     {topAssignments.map((item) => (
                       <div key={item.id} className="assignment-row">
+                        <input
+                          type="checkbox"
+                          aria-label={`Mark "${item.title}" as done`}
+                          onChange={() => toggleItemDone(item)}
+                          className="size-4 shrink-0 cursor-pointer accent-[var(--accent)]"
+                        />
                         <span className="course-mark">{item.course.slice(0, 2)}</span>
                         <div className="min-w-0 flex-1">
                           <div className="truncate font-bold">
@@ -949,7 +982,7 @@ export default function App() {
                   </div>
                 </>
               ) : activeNav === "Calendar" ? (
-                <CalendarSection items={activeItems} meetings={meetings} now={now} />
+                <CalendarSection items={activeItems} meetings={meetings} now={now} onToggleItemDone={toggleItemDone} />
               ) : (
               <>
               <div className="flex flex-col gap-4 border-b border-[var(--line)] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
@@ -1033,6 +1066,12 @@ export default function App() {
                         </div>
                         {selectCourseItems(activeItems, course.code, preferredKinds).map((item) => (
                           <div key={item.id} className={`assignment-row ${isOverdue(item, now) ? "due-now" : ""}`}>
+                            <input
+                              type="checkbox"
+                              aria-label={`Mark "${item.title}" as done`}
+                              onChange={() => toggleItemDone(item)}
+                              className="size-4 shrink-0 cursor-pointer accent-[var(--accent)]"
+                            />
                             <span className="course-mark">{item.course.slice(0, 2)}</span>
                             <div className="min-w-0 flex-1">
                               <div className="truncate font-bold">
@@ -1051,6 +1090,12 @@ export default function App() {
                   <>
                     {visible.map((item) => (
                       <div key={item.id} className="assignment-row">
+                        <input
+                          type="checkbox"
+                          aria-label={`Mark "${item.title}" as done`}
+                          onChange={() => toggleItemDone(item)}
+                          className="size-4 shrink-0 cursor-pointer accent-[var(--accent)]"
+                        />
                         <span className="course-mark">{item.course.slice(0, 2)}</span>
                         <div className="min-w-0 flex-1">
                           <div className="truncate font-bold">

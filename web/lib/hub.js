@@ -233,10 +233,23 @@ export function isOverdue(item, now) {
   return item.due && new Date(item.due) < now;
 }
 
+// Identity for an Item with no id of its own - rule 4's (source, url),
+// same key mergeItems already upserts by. Shared here so a client-only
+// "mark as done" override (manuallyDoneKeys) can key off the same identity
+// without inventing a second one.
+export function itemKey(item) {
+  return `${item.source} ${item.url}`;
+}
+
 // Completed items never show, regardless of Hide overdue - matches app.py's
-// df2e178 rule exactly. Prefer the backend's status; fall back to the raw
-// done flag if status hasn't arrived yet.
-export function isDone(item) {
+// df2e178 rule exactly. A manual check-off (manuallyDoneKeys, a student
+// crossing something off their own dashboard - #98) wins outright: it's a
+// personal, client-only override that never reaches Canvas/PrairieLearn/
+// Workday, so it must never depend on what the backend's own status says.
+// Otherwise, prefer the backend's status; fall back to the raw done flag
+// if status hasn't arrived yet.
+export function isDone(item, manuallyDoneKeys = []) {
+  if (manuallyDoneKeys.includes(itemKey(item))) return true;
   if (item.status) return item.status === "done";
   return Boolean(item.done);
 }
@@ -287,9 +300,9 @@ export function mergeCourses(base, incoming) {
 // calendar-feed's fetched items (#47) sitting alongside whatever
 // fetchUpcoming() already loaded.
 export function mergeItems(base, incoming) {
-  const byKey = new Map(base.map((i) => [`${i.source} ${i.url}`, i]));
+  const byKey = new Map(base.map((i) => [itemKey(i), i]));
   for (const i of incoming) {
-    byKey.set(`${i.source} ${i.url}`, i);
+    byKey.set(itemKey(i), i);
   }
   return Array.from(byKey.values());
 }
@@ -334,8 +347,8 @@ export async function fetchCanvasFeed(url) {
 // Completed items never show anywhere, regardless of Hide overdue (matches
 // app.py's df2e178 rule) - applied once so every tab and the Courses tab's
 // per-course lists see the same set.
-export function selectActiveItems(items) {
-  return items.filter((item) => !isDone(item));
+export function selectActiveItems(items, manuallyDoneKeys = []) {
+  return items.filter((item) => !isDone(item, manuallyDoneKeys));
 }
 
 // A hidden course (Settings - for the old/inactive enrollments Canvas keeps

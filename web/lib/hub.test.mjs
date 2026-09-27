@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hideCourseItems, mergeItems, mergeMeetings, monthGrid, parsePreferredKinds, selectConnections, selectDaySchedule, selectItemsDueOn, selectMeetingsOn, selectVisibleCourses, sortItems } from "./hub.js";
+import { hideCourseItems, isDone, itemKey, mergeItems, mergeMeetings, monthGrid, parsePreferredKinds, selectActiveItems, selectConnections, selectDaySchedule, selectItemsDueOn, selectMeetingsOn, selectVisibleCourses, sortItems } from "./hub.js";
 
 test("selectConnections: no data means nothing is connected", () => {
   const connections = selectConnections([], []);
@@ -72,6 +72,33 @@ test("mergeItems: keeps distinct (source, url) items and updates matching ones",
   const merged = mergeItems(base, incoming);
   assert.equal(merged.length, 2);
   assert.equal(merged.find((i) => i.url === "https://x/1").title, "New title");
+});
+
+test("itemKey: matches mergeItems' own identity, so a manual check-off keys off the same thing", () => {
+  const item = { source: "canvas", url: "https://x/1" };
+  assert.equal(itemKey(item), "canvas https://x/1");
+});
+
+test("isDone: a manual check-off is done regardless of the backend's own status/done", () => {
+  const item = { source: "canvas", url: "https://x/1", status: "overdue", done: false };
+  assert.equal(isDone(item), false); // unaffected without a manual override
+  assert.equal(isDone(item, [itemKey(item)]), true); // student crossed it off themselves
+});
+
+test("isDone: falls back to status, then the raw done flag, same as before manual check-off existed", () => {
+  assert.equal(isDone({ source: "s", url: "u", status: "done" }), true);
+  assert.equal(isDone({ source: "s", url: "u", status: "overdue" }), false);
+  assert.equal(isDone({ source: "s", url: "u", done: true }), true);
+  assert.equal(isDone({ source: "s", url: "u", done: false }), false);
+});
+
+test("selectActiveItems: a manually checked-off item disappears like any other done item", () => {
+  const items = [
+    { source: "canvas", url: "https://x/1", title: "Keep" },
+    { source: "canvas", url: "https://x/2", title: "Checked off" },
+  ];
+  const active = selectActiveItems(items, ["canvas https://x/2"]);
+  assert.deepEqual(active.map((i) => i.title), ["Keep"]);
 });
 
 test("mergeMeetings: keeps distinct weekly slots and updates matching ones", () => {
