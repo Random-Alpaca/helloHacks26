@@ -1,0 +1,8 @@
+[
+  {"id": 1001, "name": "CPSC 110 101 Intro to Program Design (Demo)", "course_code": "CPSC_110_101_2026W1",
+   "term": {"name": "2026 Winter Term 1"}, "enrollments": [{"type": "student", "computed_current_score": 86.4}]},
+  {"id": 1002, "name": "MATH 101 102 Integral Calculus (Demo)", "course_code": "MATH_101_102_2026W1",
+   "term": {"name": "2026 Winter Term 1"}, "enrollments": [{"type": "student", "computed_current_score": 72.0}]},
+  {"id": 1003, "name": "ENGL 110 001 Approaches to Stories (Demo)", "course_code": "ENGL_110_001_2026W1",
+   "term": {"name": "2026 Winter Term 1"}, "enrollments": [{"type": "student", "computed_current_score": null}]}
+]

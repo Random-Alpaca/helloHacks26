@@ -1,0 +1,21 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Demo Canvas//Demo Student calendar feed//EN
+X-WR-CALNAME:Demo Student Calendar (Canvas)
+BEGIN:VEVENT
+UID:event-assignment-5001
+DTSTAMP:20260901T000000Z
+DTSTART:{{due:+1d@23:59}}
+DTEND:{{due:+1d@23:59}}
+SUMMARY:Problem Set 4 [CPSC_110_101_2026W1]
+URL;VALUE=URI:https://canvas.ubc.ca/calendar?include_contexts=course_1001
+END:VEVENT
+BEGIN:VEVENT
+UID:event-calendar-event-7001
+DTSTAMP:20260901T000000Z
+DTSTART:{{due:+2d@15:00}}
+DTEND:{{due:+2d@16:00}}
+SUMMARY:Drop-in office hours [CPSC_110_101_2026W1]
+URL;VALUE=URI:https://canvas.ubc.ca/calendar?include_contexts=course_1001
+END:VEVENT
+END:VCALENDAR
