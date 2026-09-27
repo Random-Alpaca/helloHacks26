@@ -11,6 +11,14 @@ import * as XLSX from "xlsx";
 const SHEET_NAME = "View My Courses";
 const COURSE_HEADER_ALIASES = new Set(["course listing", "course"]);
 
+// Mirrors hub/workday.py's _HEADER_ALIASES - both columns ignored until the
+// schedule feature (#85), same file/row parseWorkdayCourses already reads.
+const HEADER_ALIASES = {
+  course: COURSE_HEADER_ALIASES,
+  meetingPatterns: new Set(["meeting patterns"]),
+  instructionalFormat: new Set(["instructional format"]),
+};
+
 // Mirrors hub/logic.py's _COURSE_CODE_RE exactly.
 const COURSE_CODE_RE = /^(?<faculty>[a-z]{2,5})[ _-]?[a-z]*[ _-]*(?<number>\d{2,4})[ _-]*(?<section>\d{2,4})?/i;
 
@@ -20,15 +28,28 @@ export function normaliseCourseCode(text) {
   return [m.groups.faculty.toUpperCase(), m.groups.number, m.groups.section ?? null];
 }
 
+// Mirrors hub/workday.py's _find_header_row: the row index plus a
+// {logical name: column index} map, built from whichever headers in
+// HEADER_ALIASES are present in the row containing "Course Listing"/"Course".
 function findHeaderRow(rows) {
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r] || [];
+    const found = {};
     for (let c = 0; c < row.length; c++) {
       const value = row[c] == null ? "" : String(row[c]).trim().toLowerCase();
-      if (COURSE_HEADER_ALIASES.has(value)) return [r, c];
+      for (const [name, aliases] of Object.entries(HEADER_ALIASES)) {
+        if (aliases.has(value)) found[name] = c;
+      }
     }
+    if ("course" in found) return [r, found];
   }
-  return [null, null];
+  return [null, {}];
+}
+
+function cell(row, columns, name) {
+  const col = columns[name];
+  if (col == null || col >= row.length || row[col] == null) return null;
+  return String(row[col]).trim();
 }
 
 export function courseFromListing(listing, term) {
@@ -78,7 +99,7 @@ export function parseWorkdayCourses(arrayBuffer, term) {
   fixTruncatedRange(sheet);
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
 
-  const [headerRowIndex, courseCol] = findHeaderRow(rows);
+  const [headerRowIndex, columns] = findHeaderRow(rows);
   if (headerRowIndex == null) return [];
 
   // Real exports have one row per meeting component (Lecture, Lab,
@@ -89,12 +110,92 @@ export function parseWorkdayCourses(arrayBuffer, term) {
   const seenCodes = new Set();
   for (let i = headerRowIndex + 1; i < rows.length; i++) {
     const row = rows[i] || [];
-    if (courseCol >= row.length || !row[courseCol]) continue;
-    const course = courseFromListing(String(row[courseCol]).trim(), term);
+    const listing = cell(row, columns, "course");
+    if (!listing) continue;
+    const course = courseFromListing(listing, term);
     if (course && !seenCodes.has(course.code)) {
       seenCodes.add(course.code);
       courses.push(course);
     }
   }
   return courses;
+}
+
+const DAY_CODES = { mon: "MO", tue: "TU", wed: "WE", thu: "TH", fri: "FR", sat: "SA", sun: "SU" };
+
+// Mirrors hub/workday.py's _KIND_FOR_FORMAT.
+const KIND_FOR_FORMAT = {
+  lecture: "lecture", laboratory: "lab", seminar: "seminar",
+  tutorial: "tutorial", discussion: "tutorial", exam: "exam", "final exam": "exam",
+};
+
+const TIME_RE = /^(\d{1,2}):(\d{2})\s*([ap])\.?m\.?$/i;
+
+// "10:00 a.m." -> "10:00" (24h) or null if unrecognized. Mirrors
+// hub/workday.py's _parse_time; returns a string, not a Date, since a
+// Meeting's start/end time is a naive recurring wall-clock time, not a
+// single instant (see hub.models.Meeting).
+function parseTime(text) {
+  const m = TIME_RE.exec(text.trim());
+  if (!m) return null;
+  let hour = Number(m[1]) % 12;
+  if (m[3].toLowerCase() === "p") hour += 12;
+  return `${String(hour).padStart(2, "0")}:${m[2]}`;
+}
+
+// Mirrors hub/workday.py's _parse_meeting_pattern: one "Meeting Patterns"
+// cell holds one line per meeting component, each shaped like
+// "2026-09-08 - 2026-12-05 | Mon Wed Fri | 10:00 a.m. - 11:00 a.m. | Building | Room 100".
+// A line can also be a bare "-" or otherwise unparseable (an async/online
+// component, a TBD exam slot) - skipped rather than guessed at.
+function parseMeetingPattern(pattern, courseCode, kind, source) {
+  const meetings = [];
+  for (const line of pattern.split("\n")) {
+    const parts = line.split("|").map((p) => p.trim());
+    if (parts.length < 3) continue;
+    const [dateRange, daysText, timesText, ...locationParts] = parts;
+    const [startStr, endStr] = dateRange.split(" - ").map((d) => d.trim());
+    if (!startStr || !endStr || !/^\d{4}-\d{2}-\d{2}$/.test(startStr) || !/^\d{4}-\d{2}-\d{2}$/.test(endStr)) continue;
+    const days = daysText.split(/\s+/).map((d) => DAY_CODES[d.slice(0, 3).toLowerCase()]).filter(Boolean);
+    if (days.length === 0) continue;
+    const [startText, endText] = timesText.split(" - ").map((t) => (t ?? "").trim());
+    const startTime = startText ? parseTime(startText) : null;
+    const endTime = endText ? parseTime(endText) : null;
+    if (!startTime || !endTime) continue;
+    meetings.push({
+      course: courseCode, kind, days, startTime, endTime,
+      location: locationParts.filter(Boolean).join(", "),
+      termStart: startStr, termEnd: endStr, source,
+    });
+  }
+  return meetings;
+}
+
+// Client-side mirror of hub/workday.py's parse_workday_schedule - same
+// "Meeting Patterns"/"Instructional Format" columns, same file
+// parseWorkdayCourses already reads. Returns [] (never throws) on an older
+// export missing those columns.
+export function parseWorkdaySchedule(arrayBuffer, term, source = "workday") {
+  const workbook = XLSX.read(arrayBuffer, { type: "array" });
+  const sheetName = workbook.SheetNames.includes(SHEET_NAME) ? SHEET_NAME : workbook.SheetNames[0];
+  const sheet = workbook.Sheets[sheetName];
+  fixTruncatedRange(sheet);
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null });
+
+  const [headerRowIndex, columns] = findHeaderRow(rows);
+  if (headerRowIndex == null || columns.meetingPatterns == null) return [];
+
+  const meetings = [];
+  for (let i = headerRowIndex + 1; i < rows.length; i++) {
+    const row = rows[i] || [];
+    const listing = cell(row, columns, "course");
+    const pattern = cell(row, columns, "meetingPatterns");
+    if (!listing || !pattern) continue;
+    const course = courseFromListing(listing, term);
+    if (!course) continue;
+    const formatText = (cell(row, columns, "instructionalFormat") || "").toLowerCase();
+    const kind = KIND_FOR_FORMAT[formatText] ?? "class";
+    meetings.push(...parseMeetingPattern(pattern, course.code, kind, source));
+  }
+  return meetings;
 }

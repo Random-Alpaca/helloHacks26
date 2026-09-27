@@ -78,6 +78,25 @@ CREATE TABLE IF NOT EXISTS textbooks (
     url TEXT NOT NULL,
     UNIQUE(course_id, isbn)
 );
+
+-- A recurring weekly class meeting (hub.models.Meeting) - no due date, no
+-- url, so no (source, url) identity like items has. days/start_time/
+-- term_start/term_end together with course+kind+source are the closest
+-- real-world identity a re-import can match against: the same lecture
+-- re-exported next week must update in place, not duplicate.
+CREATE TABLE IF NOT EXISTS meetings (
+    id INTEGER PRIMARY KEY,
+    course_id INTEGER REFERENCES courses(id),
+    kind TEXT NOT NULL,
+    days TEXT NOT NULL,  -- comma-joined ISO weekday codes, e.g. "MO,WE,FR"
+    start_time TEXT NOT NULL,  -- "HH:MM", 24h, naive (always America/Vancouver - see hub.models.Meeting)
+    end_time TEXT NOT NULL,
+    location TEXT NOT NULL,
+    term_start TEXT NOT NULL,  -- "YYYY-MM-DD"
+    term_end TEXT NOT NULL,
+    source TEXT NOT NULL,
+    UNIQUE(course_id, kind, days, start_time, term_start, source)
+);
 """
 
 
@@ -134,10 +153,10 @@ def _course_id(conn, course):
     return row[0]
 
 
-def save(conn, courses=(), items=(), textbooks=()):
-    """Upsert courses, then items/textbooks matched to them by canonical
-    course code (see _canonical_code) - collapses Canvas's long code,
-    Workday's short one and PrairieLearn's onto the same course row."""
+def save(conn, courses=(), items=(), textbooks=(), meetings=()):
+    """Upsert courses, then items/textbooks/meetings matched to them by
+    canonical course code (see _canonical_code) - collapses Canvas's long
+    code, Workday's short one and PrairieLearn's onto the same course row."""
     ids = {_canonical_code(c.code): _course_id(conn, c) for c in courses}
     for i in items:
         conn.execute(
@@ -157,6 +176,18 @@ def save(conn, courses=(), items=(), textbooks=()):
             "ON CONFLICT(course_id, isbn) DO UPDATE SET title=excluded.title, required=excluded.required, "
             "price=excluded.price, url=excluded.url",
             (cid, t.title, t.isbn, int(t.required), t.price, t.url),
+        )
+    for m in meetings:
+        cid = ids.get(_canonical_code(m.course))
+        if cid is None:
+            continue  # no matching course this call; skip rather than orphan the row
+        conn.execute(
+            "INSERT INTO meetings (course_id, kind, days, start_time, end_time, location, term_start, term_end, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(course_id, kind, days, start_time, term_start, source) DO UPDATE SET "
+            "end_time=excluded.end_time, location=excluded.location, term_end=excluded.term_end",
+            (cid, m.kind, ",".join(m.days), m.start_time.isoformat(), m.end_time.isoformat(),
+             m.location, m.term_start.isoformat(), m.term_end.isoformat(), m.source),
         )
     conn.commit()
 
@@ -207,3 +238,18 @@ def by_course(conn, category=None):
     for row in upcoming(conn, category):
         grouped.setdefault(row[0], []).append(row)
     return grouped
+
+
+def schedule(conn):
+    """Every recurring class meeting, joined to its course code. Row shape:
+    (code, kind, days, start_time, end_time, location, term_start, term_end,
+    source) - days/times/dates as stored (comma-joined codes, "HH:MM",
+    "YYYY-MM-DD" text); hub.models.Meeting reconstructs typed values if
+    needed, same division of labour as upcoming()'s rows. Ordered by course
+    then start time - a natural read order for a weekly-timetable view."""
+    return conn.execute(
+        "SELECT courses.code, meetings.kind, meetings.days, meetings.start_time, meetings.end_time, "
+        "meetings.location, meetings.term_start, meetings.term_end, meetings.source "
+        "FROM meetings JOIN courses ON courses.id = meetings.course_id "
+        "ORDER BY courses.code, meetings.start_time"
+    ).fetchall()
