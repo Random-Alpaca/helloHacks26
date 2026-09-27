@@ -9,7 +9,7 @@ from hub.models import Course, Item, category_for, classify_urgency, status_of
 
 st.set_page_config(page_title="Lauds", layout="wide")
 st.title("Lauds")
-st.caption("Gotham for students: every provider, one pane of glass.")
+st.caption("The first thing you check in the morning.")
 
 # One glance at "Urgency" as text still means reading every row - a marker
 # column makes the ranking visible without reading anything (hub.models
