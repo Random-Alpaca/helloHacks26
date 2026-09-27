@@ -58,6 +58,14 @@ def resolve_campus(campus):
     it's the bare hostname, not the full URL (filesystem/identity-safe,
     still stable across reconnects to the same instance).
 
+    A pasted URL that happens to match a *known* campus's base resolves to
+    that campus's own key, not its own hostname - otherwise the same real
+    instance could end up with two different source values (one from its
+    quick-connect button, one from someone pasting its URL instead) and
+    show up as two separate connections with duplicated items. Verified
+    against a real account that hit exactly this after connecting the same
+    UBC Okanagan instance both ways.
+
     Rejects anything that isn't a real https:// URL outright - this opens a
     real login browser window at whatever's returned, so a typo or a
     non-URL string must fail loudly here rather than reach Playwright."""
@@ -66,7 +74,11 @@ def resolve_campus(campus):
     parsed = urlparse(campus)
     if parsed.scheme != "https" or not parsed.netloc:
         raise ValueError(f"not a valid https:// PrairieLearn URL: {campus!r}")
-    return parsed.netloc, f"https://{parsed.netloc}"
+    base = f"https://{parsed.netloc}"
+    for key, known_base in CAMPUSES.items():
+        if known_base == base:
+            return key, known_base
+    return parsed.netloc, base
 
 # UBC courses only ever show Pacific time. Fixed offsets, not zoneinfo/pytz:
 # good enough while every course we've seen is UBC; add zones if that changes.

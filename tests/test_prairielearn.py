@@ -85,6 +85,16 @@ def test_resolve_campus_known_key():
     assert resolve_campus("prairielearn_ok") == ("prairielearn_ok", "https://prairielearn.ok.ubc.ca")
 
 
+def test_resolve_campus_pasting_a_known_instances_own_url_resolves_to_its_key():
+    # A real account connected UBC Okanagan's instance both via the
+    # quick-connect button (key "prairielearn_ok") and by pasting its URL
+    # directly - without this, the second path produces source
+    # "prairielearn.ok.ubc.ca", a different value for the same real
+    # instance, so it shows up as two separate connections with duplicated
+    # items.
+    assert resolve_campus("https://prairielearn.ok.ubc.ca") == ("prairielearn_ok", "https://prairielearn.ok.ubc.ca")
+
+
 def test_resolve_campus_accepts_a_pasted_url_for_an_unlisted_instance():
     # Any department can self-host their own PrairieLearn (a second, distinct
     # UBC Okanagan instance turned up in the same search that found the
