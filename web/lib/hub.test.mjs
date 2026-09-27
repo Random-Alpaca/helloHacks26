@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { hideCourseItems, mergeItems, selectConnections, selectVisibleCourses } from "./hub.js";
+import { hideCourseItems, mergeItems, mergeMeetings, selectConnections, selectVisibleCourses } from "./hub.js";
 
 test("selectConnections: no data means nothing is connected", () => {
   const connections = selectConnections([], []);
@@ -68,4 +68,15 @@ test("mergeItems: keeps distinct (source, url) items and updates matching ones",
   const merged = mergeItems(base, incoming);
   assert.equal(merged.length, 2);
   assert.equal(merged.find((i) => i.url === "https://x/1").title, "New title");
+});
+
+test("mergeMeetings: keeps distinct weekly slots and updates matching ones", () => {
+  const base = [{ course: "CPSC 121", kind: "lecture", days: ["MO", "WE"], startTime: "10:00", location: "Old room" }];
+  const incoming = [
+    { course: "CPSC 121", kind: "lecture", days: ["MO", "WE"], startTime: "10:00", location: "New room" }, // same slot - replaces
+    { course: "CPSC 121", kind: "lab", days: ["FR"], startTime: "09:00", location: "Lab room" }, // different kind - added
+  ];
+  const merged = mergeMeetings(base, incoming);
+  assert.equal(merged.length, 2);
+  assert.equal(merged.find((m) => m.kind === "lecture").location, "New room");
 });

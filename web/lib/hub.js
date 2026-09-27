@@ -238,6 +238,20 @@ export function mergeItems(base, incoming) {
   return Array.from(byKey.values());
 }
 
+// Merge recurring class meetings (#85) - Meeting has no (source, url)
+// identity like an Item, so the closest natural key is the same one
+// hub/db.py's `meetings` table uses: course + kind + its specific weekly
+// slot (days + start time), so re-importing an updated export replaces a
+// changed meeting instead of duplicating it.
+export function mergeMeetings(base, incoming) {
+  const key = (m) => `${m.course} ${m.kind} ${m.days.join(",")} ${m.startTime}`;
+  const byKey = new Map(base.map((m) => [key(m), m]));
+  for (const m of incoming) {
+    byKey.set(key(m), m);
+  }
+  return Array.from(byKey.values());
+}
+
 // Canvas calendar-feed connect (#47) - works with no local backend at all,
 // so it's the only Canvas path that also works on the hosted Vercel site.
 // The feed URL is a secret (works like a password): kept in the browser's

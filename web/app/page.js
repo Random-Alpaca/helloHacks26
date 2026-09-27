@@ -19,6 +19,7 @@ import {
   isOverdue,
   mergeCourses,
   mergeItems,
+  mergeMeetings,
   selectActiveItems,
   selectConnections,
   selectCourseItems,
@@ -27,7 +28,7 @@ import {
   selectVisibleItems,
   weekDates,
 } from "../lib/hub";
-import { parseWorkdayCourses } from "../lib/workday";
+import { parseWorkdayCourses, parseWorkdaySchedule } from "../lib/workday";
 
 function Icon({ name, className = "size-5" }) {
   const paths = {
@@ -56,10 +57,51 @@ const NAV_ITEMS = [
   { label: "Overview", icon: "home", tab: "all" },
   { label: "Assignments", icon: "tasks", tab: "task" },
   { label: "Calendar", icon: "calendar", tab: "deadline" },
+  { label: "Schedule", icon: "clock", tab: "schedule" },
   { label: "Materials", icon: "material", tab: "material" },
   { label: "Announcements", icon: "announcement", tab: "announcements" },
   { label: "Courses", icon: "courses", tab: "courses" },
 ];
+
+const WEEKDAY_CODES = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
+const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// A recurring weekly timetable (#85) - deliberately not tied to any specific
+// calendar week, unlike the Calendar tab's month grid: a Meeting has no
+// single date, just a day-of-week + time slot that repeats all term.
+function ScheduleView({ meetings }) {
+  if (meetings.length === 0) {
+    return (
+      <div className="p-10 text-center text-sm text-[var(--muted)]">
+        No class schedule yet - import your Workday &quot;Current Schedule&quot; export in Settings.
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-7 sm:p-6">
+      {WEEKDAY_CODES.map((code, i) => {
+        const dayMeetings = meetings
+          .filter((m) => m.days.includes(code))
+          .sort((a, b) => a.startTime.localeCompare(b.startTime));
+        return (
+          <div key={code}>
+            <div className="mb-2 text-xs font-bold uppercase tracking-wide text-[var(--muted)]">{WEEKDAY_NAMES[i]}</div>
+            <div className="space-y-2">
+              {dayMeetings.map((m, idx) => (
+                <div key={idx} className="rounded-lg border border-[var(--line)] bg-[var(--surface-soft)] p-2.5">
+                  <div className="truncate text-xs font-bold">{m.course}</div>
+                  <div className="mt-0.5 text-[0.7rem] text-[var(--muted)]">{m.kind} &middot; {m.startTime}&ndash;{m.endTime}</div>
+                  {m.location && <div className="truncate text-[0.7rem] text-[var(--muted)]">{m.location}</div>}
+                </div>
+              ))}
+              {dayMeetings.length === 0 && <div className="text-[0.7rem] text-[var(--muted-light)]">&mdash;</div>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 const THEMES = [
   { id: "everforest", label: "Everforest" },
@@ -82,7 +124,7 @@ const CUSTOM_COLOR_FIELDS = [
 const WEEKDAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
 const MAX_WORKDAY_FILE_BYTES = 5_000_000;
 
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed }) {
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
   const [customDomain, setCustomDomain] = useState("");
@@ -110,7 +152,17 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
       const buf = await file.arrayBuffer();
       const imported = parseWorkdayCourses(buf, term);
       onWorkdayImported(imported);
-      setWorkdayStatus(`Imported ${imported.length} course${imported.length === 1 ? "" : "s"}.`);
+      // Same file, same row, a column parseWorkdayCourses doesn't read
+      // (#85) - a schedule-less export (an older shape, or a school whose
+      // Workday config omits it) still imports its courses fine; this just
+      // adds nothing to the Schedule tab rather than failing the import.
+      const scheduleImported = parseWorkdaySchedule(buf, term);
+      onScheduleImported(scheduleImported);
+      // Two sentences, not one interpolated string: keeps "Imported N
+      // courses." an exact, stable substring (web/e2e's oracle matches on
+      // it) regardless of whether a schedule came along too.
+      const scheduleNote = scheduleImported.length > 0 ? ` Loaded ${scheduleImported.length} class meeting${scheduleImported.length === 1 ? "" : "s"}.` : "";
+      setWorkdayStatus(`Imported ${imported.length} course${imported.length === 1 ? "" : "s"}.${scheduleNote}`);
     } catch (err) {
       setWorkdayStatus(null);
       setError(err.message);
@@ -401,6 +453,7 @@ export default function App() {
   const [announcements, setAnnouncements] = useState([]);
   const [fetchedCourses, setFetchedCourses] = useState([]);
   const [importedCourses, setImportedCourses] = useState([]);
+  const [meetings, setMeetings] = useState([]);
   const [loadError, setLoadError] = useState(null);
   const [hiddenCourses, setHiddenCourses] = useState([]);
   const [canvasFeedUrl, setCanvasFeedUrl] = useState("");
@@ -523,6 +576,10 @@ export default function App() {
     setImportedCourses((prev) => mergeCourses(prev, imported));
   }
 
+  function importWorkdaySchedule(imported) {
+    setMeetings((prev) => mergeMeetings(prev, imported));
+  }
+
   useEffect(() => {
     load(sampleMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -641,6 +698,7 @@ export default function App() {
               onSampleModeChange={setSampleMode}
               onConnected={() => load(false)}
               onWorkdayImported={importWorkdayCourses}
+              onScheduleImported={importWorkdaySchedule}
               allCourses={allCourses}
               hiddenCourses={hiddenCourses}
               onToggleCourseHidden={toggleCourseHidden}
@@ -650,6 +708,14 @@ export default function App() {
               onConnectFeed={connectCanvasFeed}
               onDisconnectFeed={disconnectCanvasFeed}
             />
+          ) : activeNav === "Schedule" ? (
+            <section className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-card)]">
+              <div className="border-b border-[var(--line)] p-5 sm:p-6">
+                <div className="text-xl font-bold tracking-tight">Weekly schedule</div>
+                <div className="mt-1 text-sm text-[var(--muted)]">Your recurring class meetings, from Workday</div>
+              </div>
+              <ScheduleView meetings={meetings} />
+            </section>
           ) : (
           <>
           <section className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
