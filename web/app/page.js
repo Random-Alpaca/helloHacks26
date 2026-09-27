@@ -78,6 +78,7 @@ const CUSTOM_COLOR_FIELDS = [
 ];
 
 const WEEKDAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
+const MAX_WORKDAY_FILE_BYTES = 5_000_000;
 
 function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, allCourses, hiddenCourses, onToggleCourseHidden }) {
   const [term, setTerm] = useState("2026W1");
@@ -93,6 +94,15 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
     const file = e.target.files[0];
     e.target.value = "";
     if (!file) return;
+    // A real "View My Courses" export is a few hundred rows of text - a
+    // generous cap well above that, mainly to reject something huge or
+    // corrupted before it ever reaches the parser (defense in depth
+    // alongside fixTruncatedRange's own sane-range clamp - see #49).
+    if (file.size > MAX_WORKDAY_FILE_BYTES) {
+      setWorkdayStatus(null);
+      setError(`That file is too large (${Math.round(file.size / 1_000_000)}MB) - a real Workday export is much smaller than ${MAX_WORKDAY_FILE_BYTES / 1_000_000}MB.`);
+      return;
+    }
     try {
       const buf = await file.arrayBuffer();
       const imported = parseWorkdayCourses(buf, term);
