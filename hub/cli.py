@@ -9,6 +9,7 @@ import requests
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 BASE_URL_ENV = "UBC_HUB_BASE_URL"
+TIMEOUT_SECONDS = 30
 COMMANDS = {
     "upcoming": ("GET", "/api/upcoming"),
     "announcements": ("GET", "/api/announcements"),
@@ -35,7 +36,7 @@ def endpoint_url(base_url, path):
 
 def request_json(method, url):
     try:
-        response = requests.request(method, url)
+        response = requests.request(method, url, timeout=TIMEOUT_SECONDS)
     except requests.RequestException as error:
         print(f"error: {method} {url}: {error}", file=sys.stderr)
         return 1
