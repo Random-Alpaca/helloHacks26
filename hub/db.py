@@ -8,6 +8,7 @@ Textbooks get their own table since they carry ISBN/price, not a due date.
 # per source) only if we actually need to re-normalise without refetching -
 # right now every adapter is cheap enough to just re-fetch.
 """
+import re
 import sqlite3
 from pathlib import Path
 
@@ -25,6 +26,15 @@ def _canonical_code(code):
     course."""
     faculty, number, _section = normalise_course_code(code)
     return f"{faculty} {number}" if faculty and number else code
+
+
+def _canonical_term(term):
+    """Canvas's "2026 Winter Term 1" and Workday's "2026W1" name the same
+    term - collapse to the short UBC form. "" stays "" (= unknown)."""
+    # ponytail: only UBC's "<year> Winter|Summer Term <n>" spelling is mapped;
+    # anything else is kept as-is. Add a pattern when a new source needs one.
+    m = re.fullmatch(r"(\d{4})\s+(Winter|Summer)\s+Term\s+(\d)", term.strip(), re.I)
+    return f"{m[1]}{m[2][0].upper()}{m[3]}" if m else term.strip()
 
 
 # ponytail: no migration for a hub.db that predates canonical course codes -
@@ -87,13 +97,26 @@ def connect(path=PATH):
 
 
 def _course_id(conn, course):
-    code = _canonical_code(course.code)
+    code, term = _canonical_code(course.code), _canonical_term(course.term)
+    if not term:
+        # Unknown term: attach to an existing row for this code, if any.
+        # ponytail: if the same code exists under several real terms (a
+        # retake), this picks one arbitrarily; fine until we store history.
+        row = conn.execute("SELECT id FROM courses WHERE code=? ORDER BY term = '' LIMIT 1", (code,)).fetchone()
+        if row:
+            conn.execute("UPDATE courses SET title=?, grade=COALESCE(?, grade) WHERE id=?",
+                         (course.title, course.grade, row[0]))
+            return row[0]
+    else:
+        # A row saved earlier with an unknown term takes the real one now.
+        conn.execute("UPDATE courses SET term=? WHERE code=? AND term='' AND NOT EXISTS "
+                     "(SELECT 1 FROM courses WHERE code=? AND term=?)", (term, code, code, term))
     conn.execute(
         "INSERT INTO courses (code, term, title, grade) VALUES (?, ?, ?, ?) "
-        "ON CONFLICT(code, term) DO UPDATE SET title=excluded.title, grade=excluded.grade",
-        (code, course.term, course.title, course.grade),
+        "ON CONFLICT(code, term) DO UPDATE SET title=excluded.title, grade=COALESCE(excluded.grade, grade)",
+        (code, term, course.title, course.grade),
     )
-    row = conn.execute("SELECT id FROM courses WHERE code=? AND term=?", (code, course.term)).fetchone()
+    row = conn.execute("SELECT id FROM courses WHERE code=? AND term=?", (code, term)).fetchone()
     return row[0]
 
 
@@ -105,7 +128,7 @@ def save(conn, courses=(), items=(), textbooks=()):
     for i in items:
         conn.execute(
             "INSERT INTO items (course_id, category, kind, title, due, url, source, done) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(source, url) DO UPDATE SET category=excluded.category, kind=excluded.kind, "
+            "ON CONFLICT(source, url) DO UPDATE SET course_id=COALESCE(excluded.course_id, course_id), category=excluded.category, kind=excluded.kind, "
             "title=excluded.title, due=excluded.due, done=excluded.done",
             (ids.get(_canonical_code(i.course)), i.category, i.kind, i.title,
              i.due.isoformat() if i.due else None, i.url, i.source,
