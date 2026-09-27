@@ -36,5 +36,12 @@ jobs:
         with: { node-version: 22 }
       - uses: astral-sh/setup-uv@v3        # vercel build needs uv for web/api/feed.py's Python deps (#66)
       - run: npx --yes vercel@latest pull --yes --environment=production --token=$VERCEL_TOKEN
+      # web/api/feed.py needs hub/ (repo root, outside Vercel's web/ Root
+      # Directory). vercel.json's `includeFiles: "../hub/**"` looked right
+      # but Vercel rejects any includeFiles path that escapes the Root
+      # Directory at deploy time ("invalid file descriptor path"). Copying
+      # hub/ to a real sibling directory needs no special Vercel setting.
+      - name: Copy hub/ into the Vercel root
+        run: cp -r hub web/hub
       - run: npx --yes vercel@latest build --prod --token=$VERCEL_TOKEN
       - run: npx --yes vercel@latest deploy --prebuilt --prod --token=$VERCEL_TOKEN
