@@ -242,6 +242,12 @@ export default function App() {
     } catch {
       // ignore malformed/missing storage - keep the default
     }
+    // Sample data defaults to on for a first-time visitor (matches app.py's
+    // st.toggle(value=True)) - only override that default once we know the
+    // student turned it off before, so a real Canvas/PrairieLearn connection
+    // doesn't silently revert to fake data on the next reload.
+    const savedSampleMode = localStorage.getItem("gather-sample-mode");
+    if (savedSampleMode !== null) setSampleMode(savedSampleMode === "true");
   }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -250,6 +256,9 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("gather-custom-colors", JSON.stringify(customColors));
   }, [customColors]);
+  useEffect(() => {
+    localStorage.setItem("gather-sample-mode", String(sampleMode));
+  }, [sampleMode]);
 
   async function load(useSample) {
     try {
