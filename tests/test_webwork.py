@@ -96,13 +96,25 @@ def test_done_is_always_unknown_no_score_signal_on_this_page():
     assert to_item(li(PAST_DUE_WITH_DATE_ROW), "MATH 101").done is None
 
 
-def test_not_open_set_has_no_link_and_no_due_date():
+def test_not_open_set_has_no_real_link_but_still_gets_a_stable_synthetic_one():
     # Verified: a not-yet-open set has no link at all, and its "Will open on
-    # ..." date is an open date, never a due date.
-    i = to_item(li(NOT_OPEN_ROW), "MATH 101")
+    # ..." date is an open date, never a due date. But hub.db upserts items
+    # on (source, url) -- a blank url would make every not-yet-open set in a
+    # course collide, so one is synthesised from the set's own name.
+    i = to_item(li(NOT_OPEN_ROW), "MATH 101", base="https://webwork.example.edu/webwork2/MATH_101")
     assert i.title == "HW2"
-    assert i.url == ""
+    assert i.url == "https://webwork.example.edu/webwork2/MATH_101/HW2"
     assert i.due is None
+
+
+def test_two_not_open_sets_get_different_urls_not_both_blank():
+    # The concrete failure this guards against: two not-yet-open sets in the
+    # same course must not collide on ("webwork", "") in hub.db.
+    a = to_item(li(NOT_OPEN_ROW), "MATH 101", base="https://webwork.example.edu/webwork2/MATH_101")
+    other_row = NOT_OPEN_ROW.replace(">HW2<", ">HW3<")
+    b = to_item(li(other_row), "MATH 101", base="https://webwork.example.edu/webwork2/MATH_101")
+    assert a.url != b.url
+    assert a.url and b.url  # neither is blank
 
 
 def test_past_due_set_with_a_review_date_still_has_no_due_date():
@@ -131,10 +143,11 @@ def test_due_from_text_parses_the_real_verified_format():
     assert dt.isoformat() == "2026-10-01T23:59:00-07:00"
 
 
-def test_due_from_text_none_for_an_open_date_not_a_due_date():
+def test_due_from_text_does_not_itself_distinguish_open_date_from_due_date():
+    # due_from_text DOES match this text (it's just looking for the date
+    # shape) -- it's to_item's job to gate on data-set-status and only call
+    # due_from_text for an "open" set, never a "not-open" one's open-date text.
     assert due_from_text("Will open on September 30, 2026, 12:01:00 AM PDT.") is not None
-    # (this *does* match the regex -- callers must gate on data-set-status,
-    # not call due_from_text blindly on any status text; to_item does this.)
 
 
 def test_due_from_text_none_for_blank_or_no_date():

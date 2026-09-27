@@ -45,7 +45,7 @@ Try it:  uv run python -m hub.webwork <course-url> <course-code>
 """
 import re
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 from bs4 import BeautifulSoup
 
@@ -123,6 +123,11 @@ def to_item(li, course_code, base=""):
     holding the status/date text described in the module docstring. `base`
     resolves a relative href into an absolute URL; pass "" in tests where
     the exact host doesn't matter.
+
+    A not-yet-open set has no real link yet, but `hub.db`'s items table
+    upserts on `(source, url)` (AGENTS.md rule 4) -- an empty `url` would
+    make every not-yet-open set in a course collide and overwrite each
+    other, so one is synthesised from the set's own name instead.
     """
     status = li.get("data-set-status", "")
     link = li.select_one("a.fw-bold, div.ms-3 a")
@@ -132,7 +137,14 @@ def to_item(li, course_code, base=""):
     else:
         name_el = li.select_one("span.set-id-tooltip")
         title = name_el.get_text(strip=True) if name_el else li.get_text(strip=True)
-        url = ""
+        # A not-yet-open set has no link at all (verified: WW4 above has no
+        # <a>). But hub.db's items table is UNIQUE(source, url) and upserts
+        # on that pair (AGENTS.md rule 4) -- leaving `url` blank here would
+        # make every not-yet-open set in a course collide on ("webwork", "")
+        # and silently overwrite each other. Build the same base+"/"+name
+        # shape the real open/past-due links already use, so each set still
+        # gets a distinct, stable identity even before it has a real link.
+        url = urljoin(base.rstrip("/") + "/", quote(title, safe="")) if title else ""
 
     status_el = li.select_one("div.font-sm")
     status_text = status_el.get_text(" ", strip=True) if status_el else ""
@@ -142,6 +154,12 @@ def to_item(li, course_code, base=""):
     # parsed as one here.
     due = due_from_text(status_text) if status == "open" else None
 
+    # data-set-type="test" for quizzes is inferred, not directly observed:
+    # the real course had none, only "Regular Assignment"s (data-set-type=
+    # "default"). The inference comes from the page's own "Show By Type"
+    # toggle, whose data attributes read data-default-title="Regular
+    # Assignments" / data-test-title="Tests/Quizzes" -- a strong hint, not
+    # a confirmed value. Update this comment once a real quiz set is seen.
     kind = "quiz" if li.get("data-set-type") == "test" else "problemset"
 
     return Item(
