@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from hub import canvas, db, ics, prairielearn
+from hub import canvas, db, export_ics, ics, prairielearn
 from hub.logic import sort_items
 from hub.models import Item, classify_urgency, status_of
 
@@ -56,6 +56,15 @@ def _upcoming(conn):
     return [_row_to_dict(r, now) for r in rows]
 
 
+def _all_items(conn):
+    """Every item with a due date, as real Item objects - what export_ics.py
+    wants (it needs .kind/.due/.url etc, not the raw row tuple). Same
+    unfiltered set app.py's own "Add to my calendar" button already exports
+    (no done/overdue filtering - a calendar app is a fine place to still see
+    something you finished, unlike the dashboard's own upcoming list)."""
+    return [_item_of(r) for r in db.upcoming(conn)]
+
+
 def _announcements(conn):
     """Real announcements only - already most-recent-first from db.undated().
     No urgency ranking here, unlike _upcoming(): sort_items() needs a due date
@@ -73,6 +82,18 @@ def _announcements(conn):
     """
     now = datetime.now(timezone.utc)
     return [_row_to_dict(r, now) for r in db.undated(conn) if r[2] == "announcement"]
+
+
+def _schedule(conn):
+    """Every recurring class meeting, JSON-ready. No status/urgency here -
+    those are Item concepts (due-date-relative); a meeting recurs all term,
+    so "overdue"/"soon" doesn't apply to it."""
+    return [
+        {"course": code, "kind": kind, "days": days.split(","), "start_time": start_time,
+         "end_time": end_time, "location": location, "term_start": term_start,
+         "term_end": term_end, "source": source}
+        for code, kind, days, start_time, end_time, location, term_start, term_end, source in db.schedule(conn)
+    ]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -117,6 +138,16 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/courses":
             conn = db.connect()
             self._json([{"code": c, "term": t, "title": ti, "grade": g} for c, t, ti, g in db.courses(conn)])
+        elif path == "/api/calendar/kinds":
+            kinds = export_ics.known_kinds(_all_items(db.connect()))
+            self._json([{"kind": k, "color": export_ics.color_for_kind(k)} for k in kinds])
+        elif path == "/calendar.ics":
+            self._ics(export_ics.to_ics(_all_items(db.connect())))
+        elif path.startswith("/calendar/") and path.endswith(".ics"):
+            kind = path[len("/calendar/"):-len(".ics")]
+            self._ics(export_ics.to_ics(_all_items(db.connect()), kind=kind))
+        elif path == "/api/schedule":
+            self._json(_schedule(db.connect()))
         elif path in ("/", "/index.html"):
             self._serve_file(UI_DIR / "index.html", "text/html")
         else:
@@ -143,6 +174,10 @@ class Handler(BaseHTTPRequestHandler):
             self._connect(canvas.fetch)
         elif path == "/api/connect/prairielearn":
             self._connect(prairielearn.fetch)
+        elif path == "/api/connect/prairielearn_ok":
+            self._connect(lambda: prairielearn.fetch("prairielearn_ok"))
+        elif path == "/api/connect/prairielearn_custom":
+            self._connect_prairielearn_custom()
         elif path == "/api/feed":
             self._feed()
         else:
@@ -152,7 +187,9 @@ class Handler(BaseHTTPRequestHandler):
         """Same guard on both /api/feed implementations (this one and the
         Vercel function, #47): a POST carrying a feed URL - someone's secret
         - must say so explicitly, not be guessed at from an empty/absent
-        Content-Type."""
+        Content-Type. Also the one place a pasted PrairieLearn domain comes
+        through (/api/connect/prairielearn_custom), so the same hardening
+        covers both."""
         content_type = self.headers.get("Content-Type", "").split(";")[0].strip()
         if content_type != "application/json":
             raise ValueError("expected Content-Type: application/json")
@@ -169,6 +206,13 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             raise ValueError("expected a JSON object body")
         return body
+
+    def _connect_prairielearn_custom(self):
+        try:
+            domain = self._read_json_body().get("domain", "")
+        except ValueError as e:
+            return self._json({"ok": False, "error": str(e)}, status=400)
+        self._connect(lambda: prairielearn.fetch(domain))
 
     def _feed(self):
         """POST /api/feed: {url} -> that feed's items, parsed fresh, nothing
@@ -201,6 +245,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "error": str(e)}, status=502)
         db.save(db.connect(), courses, items)
         self._json({"ok": True, "courses": len(courses), "items": len(items)})
+
+    def _ics(self, body):
+        """Serve a generated .ics feed (hub.export_ics). A plain GET here is
+        a one-time import in any calendar app; a calendar app on THIS same
+        machine can also subscribe to the URL for a live-refreshing sync -
+        Google Calendar's cloud service specifically cannot, since it needs
+        a publicly reachable URL and 127.0.0.1 is never that."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/calendar; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self._cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
 
     def _serve_file(self, path, content_type):
         if not path.exists():
