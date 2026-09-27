@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from hub import canvas, db, ics, prairielearn
+from hub import canvas, db, export_ics, ics, prairielearn
 from hub.logic import sort_items
 from hub.models import Item, classify_urgency, status_of
 
@@ -54,6 +54,15 @@ def _upcoming(conn):
     rows = [r for r in db.upcoming(conn) if status_of(_item_of(r), now) != "done"]
     rows = sort_items(rows, now)
     return [_row_to_dict(r, now) for r in rows]
+
+
+def _all_items(conn):
+    """Every item with a due date, as real Item objects - what export_ics.py
+    wants (it needs .kind/.due/.url etc, not the raw row tuple). Same
+    unfiltered set app.py's own "Add to my calendar" button already exports
+    (no done/overdue filtering - a calendar app is a fine place to still see
+    something you finished, unlike the dashboard's own upcoming list)."""
+    return [_item_of(r) for r in db.upcoming(conn)]
 
 
 def _announcements(conn):
@@ -117,6 +126,14 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/courses":
             conn = db.connect()
             self._json([{"code": c, "term": t, "title": ti, "grade": g} for c, t, ti, g in db.courses(conn)])
+        elif path == "/api/calendar/kinds":
+            kinds = export_ics.known_kinds(_all_items(db.connect()))
+            self._json([{"kind": k, "color": export_ics.color_for_kind(k)} for k in kinds])
+        elif path == "/calendar.ics":
+            self._ics(export_ics.to_ics(_all_items(db.connect())))
+        elif path.startswith("/calendar/") and path.endswith(".ics"):
+            kind = path[len("/calendar/"):-len(".ics")]
+            self._ics(export_ics.to_ics(_all_items(db.connect()), kind=kind))
         elif path in ("/", "/index.html"):
             self._serve_file(UI_DIR / "index.html", "text/html")
         else:
@@ -201,6 +218,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": False, "error": str(e)}, status=502)
         db.save(db.connect(), courses, items)
         self._json({"ok": True, "courses": len(courses), "items": len(items)})
+
+    def _ics(self, body):
+        """Serve a generated .ics feed (hub.export_ics). A plain GET here is
+        a one-time import in any calendar app; a calendar app on THIS same
+        machine can also subscribe to the URL for a live-refreshing sync -
+        Google Calendar's cloud service specifically cannot, since it needs
+        a publicly reachable URL and 127.0.0.1 is never that."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/calendar; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self._cors_headers()
+        self.end_headers()
+        self.wfile.write(body)
 
     def _serve_file(self, path, content_type):
         if not path.exists():
