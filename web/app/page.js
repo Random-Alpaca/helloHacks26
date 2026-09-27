@@ -671,7 +671,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
           {!isLocalMode() && (
             <pre className="overflow-x-auto rounded-md bg-[var(--surface)] p-3 text-[0.7rem] leading-relaxed">
 {`brew install git gh uv
-gh repo clone terraceonhigh/helloHacks26
+gh repo clone Random-Alpaca/helloHacks26
 cd helloHacks26 && uv sync
 uv run playwright install chromium
 uv run streamlit run app.py`}
