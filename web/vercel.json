@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/feed.py": {
+      "includeFiles": "../hub/**"
+    }
+  }
+}

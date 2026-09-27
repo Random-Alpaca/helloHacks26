@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from hub import canvas, db, prairielearn
+from hub import canvas, db, ics, prairielearn
 from hub.logic import sort_items
 from hub.models import Item, classify_urgency, status_of
 
@@ -118,8 +118,42 @@ class Handler(BaseHTTPRequestHandler):
             self._connect(canvas.fetch)
         elif path == "/api/connect/prairielearn":
             self._connect(prairielearn.fetch)
+        elif path == "/api/feed":
+            self._feed()
         else:
             self._json({"error": "not found"}, status=404)
+
+    def _read_json_body(self):
+        """Same guard on both /api/feed implementations (this one and the
+        Vercel function, #47): a POST carrying a feed URL - someone's secret
+        - must say so explicitly, not be guessed at from an empty/absent
+        Content-Type."""
+        content_type = self.headers.get("Content-Type", "").split(";")[0].strip()
+        if content_type != "application/json":
+            raise ValueError("expected Content-Type: application/json")
+        length = int(self.headers.get("Content-Length", 0))
+        if length == 0:
+            return {}
+        return json.loads(self.rfile.read(length))
+
+    def _feed(self):
+        """POST /api/feed: {url} -> that feed's items, parsed fresh, nothing
+        saved. url is never logged - see hub/ics.py's fetch_untrusted() for
+        the host allowlist and size/time limits shared with the Vercel
+        function (rule 1: one function, not two)."""
+        try:
+            url = self._read_json_body().get("url", "")
+        except ValueError as e:
+            return self._json({"error": str(e)}, status=400)
+        try:
+            items = ics.fetch_untrusted(url, "canvas")
+        except ValueError as e:
+            return self._json({"error": str(e)}, status=400)
+        except Exception as e:  # ponytail: same broad catch as _connect() - a bad/expired/
+            # slow feed shouldn't take the server down.
+            return self._json({"error": str(e)}, status=502)
+        now = datetime.now(timezone.utc)
+        self._json([ics.to_dict(i, now) for i in items])
 
     def _connect(self, fetch_fn):
         """Opens a browser window for the student to sign in themselves
