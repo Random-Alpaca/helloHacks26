@@ -4,12 +4,15 @@ import { useEffect, useMemo, useState } from "react";
 import {
   connectCanvas,
   connectPrairieLearn,
+  connectPrairieLearnCustom,
+  connectPrairieLearnOk,
   displayLabel,
   fetchAnnouncements,
   fetchCourses,
   fetchUpcoming,
   formatDue,
   hasItemDueOn,
+  hideCourseItems,
   isDone,
   isLocalMode,
   isOverdue,
@@ -18,6 +21,7 @@ import {
   selectConnections,
   selectCourseItems,
   selectNextUp,
+  selectVisibleCourses,
   selectVisibleItems,
   weekDates,
 } from "../lib/hub";
@@ -74,18 +78,31 @@ const CUSTOM_COLOR_FIELDS = [
 ];
 
 const WEEKDAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
+const MAX_WORKDAY_FILE_BYTES = 5_000_000;
 
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported }) {
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, allCourses, hiddenCourses, onToggleCourseHidden }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
+  const [customDomain, setCustomDomain] = useState("");
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
   const byId = Object.fromEntries(connections.map((c) => [c.id, c]));
+  const FIXED_IDS = new Set(["canvas", "prairielearn", "prairielearn_ok", "workday"]);
+  const customConnections = connections.filter((c) => !FIXED_IDS.has(c.id));
 
   async function handleFile(e) {
     const file = e.target.files[0];
     e.target.value = "";
     if (!file) return;
+    // A real "View My Courses" export is a few hundred rows of text - a
+    // generous cap well above that, mainly to reject something huge or
+    // corrupted before it ever reaches the parser (defense in depth
+    // alongside fixTruncatedRange's own sane-range clamp - see #49).
+    if (file.size > MAX_WORKDAY_FILE_BYTES) {
+      setWorkdayStatus(null);
+      setError(`That file is too large (${Math.round(file.size / 1_000_000)}MB) - a real Workday export is much smaller than ${MAX_WORKDAY_FILE_BYTES / 1_000_000}MB.`);
+      return;
+    }
     try {
       const buf = await file.arrayBuffer();
       const imported = parseWorkdayCourses(buf, term);
@@ -197,6 +214,63 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
 
           <div className="flex flex-wrap items-center justify-between gap-3 py-3">
             <div className="flex items-center gap-3">
+              <span className={`size-2.5 rounded-full ${byId.prairielearn_ok.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div>
+                <div className="font-bold">PrairieLearn (Okanagan)</div>
+                <div className="text-xs text-[var(--muted)]">{byId.prairielearn_ok.connected ? "Connected" : "Not connected"} &middot; {byId.prairielearn_ok.detail}</div>
+              </div>
+            </div>
+            {isLocalMode() && !sampleMode && (
+              <AppButton disabled={busy !== null} onClick={() => run("prairielearn_ok", connectPrairieLearnOk)} className="toggle-pill">
+                {busy === "prairielearn_ok" ? "Signing in…" : byId.prairielearn_ok.connected ? "Reconnect" : "Connect"}
+              </AppButton>
+            )}
+          </div>
+
+          {customConnections.map((c) => (
+            <div key={c.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+              <div className="flex items-center gap-3">
+                <span className="size-2.5 rounded-full bg-[var(--success)]" />
+                <div>
+                  <div className="font-bold">{c.label}</div>
+                  <div className="text-xs text-[var(--muted)]">Connected &middot; {c.detail}</div>
+                </div>
+              </div>
+              {isLocalMode() && !sampleMode && (
+                <AppButton disabled={busy !== null} onClick={() => run(c.id, () => connectPrairieLearnCustom(`https://${c.id}`))} className="toggle-pill">
+                  {busy === c.id ? "Signing in…" : "Reconnect"}
+                </AppButton>
+              )}
+            </div>
+          ))}
+
+          {isLocalMode() && !sampleMode && (
+            <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+              <div className="flex items-center gap-3">
+                <span className="size-2.5 rounded-full bg-[var(--muted-light)]" />
+                <div>
+                  <div className="font-bold">Different PrairieLearn?</div>
+                  <div className="text-xs text-[var(--muted)]">Any school can self-host their own - paste its address (e.g. https://prairielearn.example.edu)</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={customDomain}
+                  onChange={(e) => setCustomDomain(e.target.value)}
+                  placeholder="https://prairielearn.example.edu"
+                  aria-label="Custom PrairieLearn URL"
+                  className="w-56 rounded-md border border-[var(--line)] bg-[var(--surface-soft)] px-2 py-1 text-xs"
+                />
+                <AppButton disabled={busy !== null || !customDomain} onClick={() => run("prairielearn_custom", () => connectPrairieLearnCustom(customDomain))} className="toggle-pill">
+                  {busy === "prairielearn_custom" ? "Signing in…" : "Connect"}
+                </AppButton>
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
               <span className={`size-2.5 rounded-full ${byId.workday.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
               <div>
                 <div className="font-bold">Workday</div>
@@ -217,6 +291,30 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
         )}
         {workdayStatus && <div className="mt-3 text-xs text-[var(--muted)]">{workdayStatus}</div>}
         {error && <div className="connect-error mt-3">{error}</div>}
+      </section>
+
+      <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
+        <div className="mb-1 text-xl font-bold tracking-tight">Courses</div>
+        <div className="mb-5 text-sm text-[var(--muted)]">
+          Hide old or inactive courses a provider still lists (Canvas, especially, likes to keep listing ones you're not really in this term) - a hidden course disappears everywhere, not just here.
+        </div>
+        <div className="divide-y divide-[var(--line)]">
+          {allCourses.map((c) => (
+            <label key={c.code} className="flex cursor-pointer items-center justify-between gap-3 py-3">
+              <div className="min-w-0">
+                <div className="font-bold">{c.code}</div>
+                <div className="truncate text-xs text-[var(--muted)]">{c.title}</div>
+              </div>
+              <input
+                type="checkbox"
+                checked={!hiddenCourses.includes(c.code)}
+                onChange={(e) => onToggleCourseHidden(c.code, e.target.checked)}
+                aria-label={`Show ${c.code}`}
+              />
+            </label>
+          ))}
+          {allCourses.length === 0 && <div className="py-3 text-sm text-[var(--muted)]">No courses yet.</div>}
+        </div>
       </section>
     </div>
   );
@@ -243,6 +341,7 @@ export default function App() {
   const [fetchedCourses, setFetchedCourses] = useState([]);
   const [importedCourses, setImportedCourses] = useState([]);
   const [loadError, setLoadError] = useState(null);
+  const [hiddenCourses, setHiddenCourses] = useState([]);
 
   useEffect(() => {
     setTheme(localStorage.getItem("gather-theme") || "everforest");
@@ -258,6 +357,12 @@ export default function App() {
     // keeps seeing it.
     const savedSampleMode = localStorage.getItem("gather-sample-mode");
     if (savedSampleMode !== null) setSampleMode(savedSampleMode === "true");
+    try {
+      const saved = JSON.parse(localStorage.getItem("gather-hidden-courses"));
+      if (Array.isArray(saved)) setHiddenCourses(saved);
+    } catch {
+      // ignore malformed/missing storage - keep the default (nothing hidden)
+    }
   }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -269,23 +374,33 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("gather-sample-mode", String(sampleMode));
   }, [sampleMode]);
+  useEffect(() => {
+    localStorage.setItem("gather-hidden-courses", JSON.stringify(hiddenCourses));
+  }, [hiddenCourses]);
+
+  function toggleCourseHidden(code, visible) {
+    setHiddenCourses((prev) => (visible ? prev.filter((c) => c !== code) : [...prev, code]));
+  }
 
   async function load(useSample) {
     try {
-      const [nextItems, nextAnnouncements, nextCourses] = await Promise.all([
-        fetchUpcoming(useSample),
-        fetchAnnouncements(useSample),
-        fetchCourses(useSample),
-      ]);
+      const [nextItems, nextCourses] = await Promise.all([fetchUpcoming(useSample), fetchCourses(useSample)]);
       setItems(nextItems);
-      setAnnouncements(nextAnnouncements);
       setFetchedCourses(nextCourses);
       setLoadError(null);
     } catch (e) {
       setItems([]);
-      setAnnouncements([]);
       setFetchedCourses([]);
       setLoadError(e.message);
+    }
+    // Announcements are a separate, best-effort feed (GET /api/announcements
+    // isn't on every backend yet - e.g. before #50 merges) - a missing or
+    // failing endpoint shouldn't take the rest of the dashboard down with it
+    // the way a failed items/courses fetch does.
+    try {
+      setAnnouncements(await fetchAnnouncements(useSample));
+    } catch {
+      setAnnouncements([]);
     }
   }
 
@@ -299,9 +414,10 @@ export default function App() {
   }, [sampleMode]);
 
   const now = new Date();
-  const courses = mergeCourses(fetchedCourses, importedCourses);
-  const activeItems = selectActiveItems(items);
-  const doneCount = items.filter(isDone).length;
+  const allCourses = mergeCourses(fetchedCourses, importedCourses);
+  const courses = selectVisibleCourses(allCourses, hiddenCourses);
+  const activeItems = hideCourseItems(selectActiveItems(items), hiddenCourses);
+  const doneCount = hideCourseItems(items, hiddenCourses).filter(isDone).length;
   const overdueCount = activeItems.filter((item) => isOverdue(item, now)).length;
   const dueThisWeekCount = activeItems.filter((item) => {
     if (!item.due) return false;
@@ -321,10 +437,11 @@ export default function App() {
   const visible = selectVisibleItems(filteredByCourse, { tab: activeNavTab, hideOverdue, showN, now });
 
   const searchedAnnouncements = useMemo(() => {
+    const visibleAnnouncementsBase = hideCourseItems(announcements, hiddenCourses);
     const term = search.toLowerCase();
-    if (!term) return announcements;
-    return announcements.filter((item) => item.title.toLowerCase().includes(term) || item.course.toLowerCase().includes(term));
-  }, [announcements, search]);
+    if (!term) return visibleAnnouncementsBase;
+    return visibleAnnouncementsBase.filter((item) => item.title.toLowerCase().includes(term) || item.course.toLowerCase().includes(term));
+  }, [announcements, hiddenCourses, search]);
   const visibleAnnouncements = (activeFilter === "All" ? searchedAnnouncements : searchedAnnouncements.filter((item) => item.course === activeFilter)).slice(0, showN);
 
   const topAssignments = selectVisibleItems(activeItems, { tab: "all", hideOverdue: false, showN: 5, now });
@@ -408,6 +525,9 @@ export default function App() {
               onSampleModeChange={setSampleMode}
               onConnected={() => load(false)}
               onWorkdayImported={importWorkdayCourses}
+              allCourses={allCourses}
+              hiddenCourses={hiddenCourses}
+              onToggleCourseHidden={toggleCourseHidden}
             />
           ) : (
           <>
@@ -577,6 +697,9 @@ export default function App() {
                           <div className="truncate font-bold">{item.title}</div>
                           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-[var(--muted)]">
                             <span>{item.course}</span><span>·</span><span>{item.kind}</span>
+                            {/* The boxed due-date badge below is sm:+ only - repeat it as
+                                plain text here so due dates aren't lost below that breakpoint. */}
+                            <span className={`sm:hidden ${isOverdue(item, now) ? "font-bold text-[var(--danger)]" : ""}`}>· {formatDue(item.due)}</span>
                           </div>
                         </div>
                         <div className={`hidden shrink-0 rounded-lg px-3 py-2 text-right sm:block ${isOverdue(item, now) ? "due-now" : ""}`}>
