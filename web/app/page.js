@@ -263,7 +263,7 @@ function CalendarSection({ items, meetings, now, onToggleItemDone }) {
   );
 }
 
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind, brightspaceCourseCount, onBrightspaceConnected, webworkItemCount, onWebworkConnected }) {
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind, brightspaceCourseCount, onBrightspaceConnected, webworkConnections, onWebworkConnected }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
   const [customDomain, setCustomDomain] = useState("");
@@ -528,22 +528,37 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
             </div>
           )}
 
-          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+          <div className="flex flex-col gap-3 py-3">
             <div className="flex items-center gap-3">
-              <span className={`size-2.5 rounded-full ${webworkItemCount > 0 ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
-              <div>
-                <div className="font-bold">WeBWorK</div>
-                <div className="text-xs text-[var(--muted)]">
-                  {webworkItemCount > 0
-                    ? `Connected · ${webworkItemCount} item${webworkItemCount === 1 ? "" : "s"}`
-                    : webworkItemCount === 0
-                      ? "Connected · nothing currently open"
-                      : "Not connected"}
-                </div>
-              </div>
+              <span className={`size-2.5 rounded-full ${webworkConnections.length > 0 ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div className="font-bold">WeBWorK</div>
             </div>
+            {/* one row per connected course - a school can run separate WeBWorK
+                instances per course, so each keeps its own url/courseCode and
+                reconnects independently (issue raised live: one real account
+                had WeBWorK for exactly one course, but that's not true generally) */}
+            {webworkConnections.map((conn) => (
+              <div key={conn.courseCode} className="flex flex-wrap items-center justify-between gap-3 pl-6">
+                <div className="text-xs text-[var(--muted)]">
+                  <span className="font-semibold text-[var(--fg)]">{conn.courseCode}</span>
+                  {" · "}
+                  {conn.itemCount > 0
+                    ? `${conn.itemCount} item${conn.itemCount === 1 ? "" : "s"}`
+                    : "nothing currently open"}
+                </div>
+                {isLocalMode() && !sampleMode && (
+                  <AppButton
+                    disabled={busy !== null}
+                    onClick={() => run("webwork", async () => onWebworkConnected(conn.url, conn.courseCode, (await connectWebWork(conn.url, conn.courseCode)).items))}
+                    className="toggle-pill"
+                  >
+                    {busy === "webwork" ? "Signing in…" : "Reconnect"}
+                  </AppButton>
+                )}
+              </div>
+            ))}
             {isLocalMode() && !sampleMode && (
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 pl-6">
                 <input
                   type="text"
                   value={webworkUrl}
@@ -563,10 +578,17 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
                 />
                 <AppButton
                   disabled={busy !== null || !webworkUrl || !webworkCourseCode}
-                  onClick={() => run("webwork", async () => onWebworkConnected((await connectWebWork(webworkUrl, webworkCourseCode)).items))}
+                  onClick={() =>
+                    run("webwork", async () => {
+                      const { items } = await connectWebWork(webworkUrl, webworkCourseCode);
+                      onWebworkConnected(webworkUrl, webworkCourseCode, items);
+                      setWebworkUrl("");
+                      setWebworkCourseCode("");
+                    })
+                  }
                   className="toggle-pill"
                 >
-                  {busy === "webwork" ? "Signing in…" : webworkItemCount > 0 ? "Reconnect" : "Connect"}
+                  {busy === "webwork" ? "Signing in…" : "Add course"}
                 </AppButton>
               </div>
             )}
@@ -701,7 +723,13 @@ export default function App() {
   // the real connection was still there in hub.db - persisted like every
   // other Connections-tab fact for the same reason canvasFeedUrl is.
   const [brightspaceCourseCount, setBrightspaceCourseCount] = useState(null);
-  const [webworkItemCount, setWebworkItemCount] = useState(null);
+  // A list, not one value - more than one course can run its own WeBWorK
+  // (issue raised live: a student's real account had WeBWorK for exactly
+  // one course, but that's not true generally). Each entry is its own
+  // independent connection - own url, own course code, own item count -
+  // keyed by courseCode so reconnecting the same course updates it in
+  // place instead of appending a duplicate.
+  const [webworkConnections, setWebworkConnections] = useState([]);
   const [canvasFeedUrl, setCanvasFeedUrl] = useState("");
   const [feedItems, setFeedItems] = useState([]);
   const [feedError, setFeedError] = useState(null);
@@ -739,8 +767,12 @@ export default function App() {
     }
     const savedBrightspaceCount = localStorage.getItem("gather-brightspace-course-count");
     if (savedBrightspaceCount !== null) setBrightspaceCourseCount(Number(savedBrightspaceCount));
-    const savedWebworkCount = localStorage.getItem("gather-webwork-item-count");
-    if (savedWebworkCount !== null) setWebworkItemCount(Number(savedWebworkCount));
+    try {
+      const saved = JSON.parse(localStorage.getItem("gather-webwork-connections"));
+      if (Array.isArray(saved)) setWebworkConnections(saved);
+    } catch {
+      // ignore malformed/missing storage - keep the default (no connections yet)
+    }
     setPreferredKinds(readPreferredKindsCookie());
     // The feed URL is a secret (works like a password) - localStorage only,
     // never sent anywhere but /api/feed. Re-fetches automatically on every
@@ -793,9 +825,12 @@ export default function App() {
     localStorage.setItem("gather-brightspace-course-count", String(brightspaceCourseCount));
   }, [brightspaceCourseCount]);
   useEffect(() => {
-    if (webworkItemCount === null) return;
-    localStorage.setItem("gather-webwork-item-count", String(webworkItemCount));
-  }, [webworkItemCount]);
+    localStorage.setItem("gather-webwork-connections", JSON.stringify(webworkConnections));
+  }, [webworkConnections]);
+
+  function upsertWebworkConnection(url, courseCode, itemCount) {
+    setWebworkConnections((prev) => [...prev.filter((c) => c.courseCode !== courseCode), { url, courseCode, itemCount }]);
+  }
 
   function toggleCourseHidden(code, visible) {
     setHiddenCourses((prev) => (visible ? prev.filter((c) => c !== code) : [...prev, code]));
@@ -1002,8 +1037,8 @@ export default function App() {
               onTogglePreferredKind={togglePreferredKind}
               brightspaceCourseCount={brightspaceCourseCount}
               onBrightspaceConnected={setBrightspaceCourseCount}
-              webworkItemCount={webworkItemCount}
-              onWebworkConnected={setWebworkItemCount}
+              webworkConnections={webworkConnections}
+              onWebworkConnected={upsertWebworkConnection}
             />
           ) : activeNav === "Schedule" ? (
             <section className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-card)]">
