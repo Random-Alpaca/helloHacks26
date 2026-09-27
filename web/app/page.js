@@ -5,6 +5,7 @@ import {
   connectCanvas,
   connectPrairieLearn,
   displayLabel,
+  fetchAnnouncements,
   fetchCourses,
   fetchUpcoming,
   formatDue,
@@ -35,6 +36,8 @@ function Icon({ name, className = "size-5" }) {
     menu: <><path d="M4 7h16M4 12h16M4 17h16" /></>,
     spark: <><path d="m12 3 1.3 4.2L17 9l-3.7 1.8L12 15l-1.3-4.2L7 9l3.7-1.8L12 3Z" /><path d="m5 14 .7 2.3L8 17l-2.3.7L5 20l-.7-2.3L2 17l2.3-.7L5 14Z" /></>,
     settings: <><path d="M4 6h10M18 6h2M4 18h10M18 18h2M4 12h4M12 12h8" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="16" cy="18" r="2" /></>,
+    material: <><path d="M7 3h7l4 4v14H7z" /><path d="M14 3v4h4M9 12h6M9 16h6" /></>,
+    announcement: <><path d="M9 5 3 9v6h6l6 4V1z" /><path d="M16 8a4.5 4.5 0 0 1 0 8" /></>,
   };
   return <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
@@ -47,6 +50,8 @@ const NAV_ITEMS = [
   { label: "Overview", icon: "home", tab: "all" },
   { label: "Assignments", icon: "tasks", tab: "task" },
   { label: "Calendar", icon: "calendar", tab: "deadline" },
+  { label: "Materials", icon: "material", tab: "material" },
+  { label: "Announcements", icon: "announcement", tab: "announcements" },
   { label: "Courses", icon: "courses", tab: "courses" },
 ];
 
@@ -70,11 +75,12 @@ const CUSTOM_COLOR_FIELDS = [
 
 const WEEKDAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
 
-function QuickActions({ sampleMode, onSampleModeChange, onConnected, onWorkdayImported }) {
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported }) {
   const [term, setTerm] = useState("2026W1");
-  const [status, setStatus] = useState(null);
+  const [workdayStatus, setWorkdayStatus] = useState(null);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
+  const byId = Object.fromEntries(connections.map((c) => [c.id, c]));
 
   async function handleFile(e) {
     const file = e.target.files[0];
@@ -82,11 +88,11 @@ function QuickActions({ sampleMode, onSampleModeChange, onConnected, onWorkdayIm
     if (!file) return;
     try {
       const buf = await file.arrayBuffer();
-      const courses = parseWorkdayCourses(buf, term);
-      onWorkdayImported(courses);
-      setStatus(`Imported ${courses.length} course${courses.length === 1 ? "" : "s"}.`);
+      const imported = parseWorkdayCourses(buf, term);
+      onWorkdayImported(imported);
+      setWorkdayStatus(`Imported ${imported.length} course${imported.length === 1 ? "" : "s"}.`);
     } catch (err) {
-      setStatus(null);
+      setWorkdayStatus(null);
       setError(err.message);
     }
   }
@@ -104,37 +110,6 @@ function QuickActions({ sampleMode, onSampleModeChange, onConnected, onWorkdayIm
     }
   }
 
-  return (
-    <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5 shadow-[var(--shadow-card)]">
-      <div className="mb-4 font-bold">Quick actions</div>
-      <label className="toggle-pill mb-3 flex w-full items-center justify-between">
-        <span>Sample data</span>
-        <input type="checkbox" checked={sampleMode} onChange={(e) => onSampleModeChange(e.target.checked)} />
-      </label>
-      {isLocalMode() && !sampleMode && (
-        <div className="mb-3 flex flex-col gap-2">
-          <AppButton disabled={busy !== null} onClick={() => run("canvas", connectCanvas)} className="toggle-pill justify-center">
-            {busy === "canvas" ? "Signing in…" : "Connect Canvas"}
-          </AppButton>
-          <AppButton disabled={busy !== null} onClick={() => run("prairielearn", connectPrairieLearn)} className="toggle-pill justify-center">
-            {busy === "prairielearn" ? "Signing in…" : "Connect PrairieLearn"}
-          </AppButton>
-        </div>
-      )}
-      <div className="flex items-center gap-2">
-        <input type="text" value={term} onChange={(e) => setTerm(e.target.value)} size={7} className="rounded-md border border-[var(--line)] bg-[var(--surface-soft)] px-2 py-1 text-xs" />
-        <label className="toggle-pill flex-1 justify-center text-center">
-          Import Workday
-          <input type="file" accept=".xlsx" onChange={handleFile} className="hidden" />
-        </label>
-      </div>
-      {status && <div className="mt-2 text-xs text-[var(--muted)]">{status}</div>}
-      {error && <div className="connect-error mt-2">{error}</div>}
-    </section>
-  );
-}
-
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections }) {
   return (
     <div className="max-w-2xl space-y-6">
       <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
@@ -183,20 +158,65 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
             ? "What's actually feeding your dashboard right now."
             : "This is the hosted demo, so Canvas and PrairieLearn can't connect here - run Hub locally to link a real account (see the README)."}
         </div>
+
+        <label className="toggle-pill mb-5 flex w-full items-center justify-between">
+          <span>Sample data</span>
+          <input type="checkbox" checked={sampleMode} onChange={(e) => onSampleModeChange(e.target.checked)} />
+        </label>
+
         <div className="divide-y divide-[var(--line)]">
-          {connections.map((c) => (
-            <div key={c.id} className="flex items-center justify-between py-3">
-              <div className="flex items-center gap-3">
-                <span className={`size-2.5 rounded-full ${c.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
-                <span className="font-bold">{c.label}</span>
-              </div>
-              <div className="text-right text-sm">
-                <div className={c.connected ? "font-bold text-[var(--success)]" : "text-[var(--muted)]"}>{c.connected ? "Connected" : "Not connected"}</div>
-                <div className="text-xs text-[var(--muted)]">{c.detail}</div>
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className={`size-2.5 rounded-full ${byId.canvas.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div>
+                <div className="font-bold">Canvas</div>
+                <div className="text-xs text-[var(--muted)]">{byId.canvas.connected ? "Connected" : "Not connected"} &middot; {byId.canvas.detail}</div>
               </div>
             </div>
-          ))}
+            {isLocalMode() && !sampleMode && (
+              <AppButton disabled={busy !== null} onClick={() => run("canvas", connectCanvas)} className="toggle-pill">
+                {busy === "canvas" ? "Signing in…" : byId.canvas.connected ? "Reconnect" : "Connect"}
+              </AppButton>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className={`size-2.5 rounded-full ${byId.prairielearn.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div>
+                <div className="font-bold">PrairieLearn</div>
+                <div className="text-xs text-[var(--muted)]">{byId.prairielearn.connected ? "Connected" : "Not connected"} &middot; {byId.prairielearn.detail}</div>
+              </div>
+            </div>
+            {isLocalMode() && !sampleMode && (
+              <AppButton disabled={busy !== null} onClick={() => run("prairielearn", connectPrairieLearn)} className="toggle-pill">
+                {busy === "prairielearn" ? "Signing in…" : byId.prairielearn.connected ? "Reconnect" : "Connect"}
+              </AppButton>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className={`size-2.5 rounded-full ${byId.workday.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div>
+                <div className="font-bold">Workday</div>
+                <div className="text-xs text-[var(--muted)]">{byId.workday.connected ? "Imported" : "Not imported"} &middot; {byId.workday.detail}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <input type="text" value={term} onChange={(e) => setTerm(e.target.value)} size={7} aria-label="Term" className="rounded-md border border-[var(--line)] bg-[var(--surface-soft)] px-2 py-1 text-xs" />
+              <label className="toggle-pill cursor-pointer">
+                Import .xlsx
+                <input type="file" accept=".xlsx" onChange={handleFile} className="hidden" />
+              </label>
+            </div>
+          </div>
         </div>
+        {isLocalMode() && sampleMode && (
+          <div className="mt-3 text-xs text-[var(--muted)]">Turn off Sample data above to connect a real Canvas or PrairieLearn account.</div>
+        )}
+        {workdayStatus && <div className="mt-3 text-xs text-[var(--muted)]">{workdayStatus}</div>}
+        {error && <div className="connect-error mt-3">{error}</div>}
       </section>
     </div>
   );
@@ -212,8 +232,14 @@ export default function App() {
   const [theme, setTheme] = useState("everforest");
   const [customColors, setCustomColors] = useState(DEFAULT_CUSTOM_COLORS);
 
-  const [sampleMode, setSampleMode] = useState(true);
+  // First-time default: off in local mode (a local run means someone's about
+  // to connect a real account, so show that path immediately rather than
+  // hiding it behind fake data - matches the hosted demo, where real data
+  // shows immediately) - on everywhere else, matching app.py's
+  // st.toggle(value=True). Overridden below by whatever was saved last.
+  const [sampleMode, setSampleMode] = useState(!isLocalMode());
   const [items, setItems] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
   const [fetchedCourses, setFetchedCourses] = useState([]);
   const [importedCourses, setImportedCourses] = useState([]);
   const [loadError, setLoadError] = useState(null);
@@ -226,6 +252,12 @@ export default function App() {
     } catch {
       // ignore malformed/missing storage - keep the default
     }
+    // Once the student has actually chosen (either way), that choice sticks
+    // across reloads - so a real connection doesn't silently revert to fake
+    // data, and so someone who deliberately wants sample data in local mode
+    // keeps seeing it.
+    const savedSampleMode = localStorage.getItem("gather-sample-mode");
+    if (savedSampleMode !== null) setSampleMode(savedSampleMode === "true");
   }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -234,15 +266,24 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("gather-custom-colors", JSON.stringify(customColors));
   }, [customColors]);
+  useEffect(() => {
+    localStorage.setItem("gather-sample-mode", String(sampleMode));
+  }, [sampleMode]);
 
   async function load(useSample) {
     try {
-      const [nextItems, nextCourses] = await Promise.all([fetchUpcoming(useSample), fetchCourses(useSample)]);
+      const [nextItems, nextAnnouncements, nextCourses] = await Promise.all([
+        fetchUpcoming(useSample),
+        fetchAnnouncements(useSample),
+        fetchCourses(useSample),
+      ]);
       setItems(nextItems);
+      setAnnouncements(nextAnnouncements);
       setFetchedCourses(nextCourses);
       setLoadError(null);
     } catch (e) {
       setItems([]);
+      setAnnouncements([]);
       setFetchedCourses([]);
       setLoadError(e.message);
     }
@@ -278,6 +319,14 @@ export default function App() {
 
   const filteredByCourse = activeFilter === "All" ? searched : searched.filter((item) => item.course === activeFilter);
   const visible = selectVisibleItems(filteredByCourse, { tab: activeNavTab, hideOverdue, showN, now });
+
+  const searchedAnnouncements = useMemo(() => {
+    const term = search.toLowerCase();
+    if (!term) return announcements;
+    return announcements.filter((item) => item.title.toLowerCase().includes(term) || item.course.toLowerCase().includes(term));
+  }, [announcements, search]);
+  const visibleAnnouncements = (activeFilter === "All" ? searchedAnnouncements : searchedAnnouncements.filter((item) => item.course === activeFilter)).slice(0, showN);
+
   const nextUp = selectNextUp(activeItems);
   const days = weekDates(now);
   const connections = selectConnections(items, importedCourses);
@@ -348,7 +397,17 @@ export default function App() {
 
         <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
           {activeNav === "Settings" ? (
-            <SettingsPage theme={theme} setTheme={setTheme} customColors={customColors} setCustomColors={setCustomColors} connections={connections} />
+            <SettingsPage
+              theme={theme}
+              setTheme={setTheme}
+              customColors={customColors}
+              setCustomColors={setCustomColors}
+              connections={connections}
+              sampleMode={sampleMode}
+              onSampleModeChange={setSampleMode}
+              onConnected={() => load(false)}
+              onWorkdayImported={importWorkdayCourses}
+            />
           ) : (
           <>
           <section className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
@@ -418,14 +477,33 @@ export default function App() {
                   <input type="range" min={5} max={50} value={showN} onChange={(e) => setShowN(Number(e.target.value))} />{" "}
                   {showN}
                 </label>
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={hideOverdue} onChange={(e) => setHideOverdue(e.target.checked)} />
-                  Hide overdue
-                </label>
+                {activeNavTab !== "announcements" && (
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={hideOverdue} onChange={(e) => setHideOverdue(e.target.checked)} />
+                    Hide overdue
+                  </label>
+                )}
               </div>
 
               <div>
-                {activeNavTab === "courses" ? (
+                {activeNavTab === "announcements" ? (
+                  visibleAnnouncements.length === 0 ? (
+                    <div className="p-10 text-center text-sm text-[var(--muted)]">
+                      {sampleMode ? "No announcements in sample data." : "Nothing yet. Connect Canvas above."}
+                    </div>
+                  ) : (
+                    visibleAnnouncements.map((item) => (
+                      <div key={item.id} className="assignment-row">
+                        <span className="course-mark">{item.course.slice(0, 2)}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-bold">{item.title}</div>
+                          <div className="mt-1 text-xs font-medium text-[var(--muted)]">{item.course}</div>
+                        </div>
+                        <a href={item.url} aria-label="Open"><Icon name="arrow" className="size-4 shrink-0 text-[var(--muted-light)]" /></a>
+                      </div>
+                    ))
+                  )
+                ) : activeNavTab === "courses" ? (
                   courses.length === 0 ? (
                     <div className="p-10 text-center text-sm text-[var(--muted)]">
                       {sampleMode ? "No courses." : "Nothing yet. Connect Canvas above."}
@@ -444,7 +522,7 @@ export default function App() {
                             <span className="course-mark">{item.course.slice(0, 2)}</span>
                             <div className="min-w-0 flex-1">
                               <div className="truncate font-bold">{item.title}</div>
-                              <div className="text-xs text-[var(--muted)]">{displayLabel(item.urgency)} &middot; {formatDue(item.due)}</div>
+                              <div className="text-xs text-[var(--muted)]">{item.kind} &middot; {displayLabel(item.urgency)} &middot; {formatDue(item.due)}</div>
                             </div>
                             <a href={item.url} className="text-xs font-bold text-[var(--accent)]">open</a>
                           </div>
@@ -501,12 +579,9 @@ export default function App() {
                 )}
               </section>
 
-              <QuickActions
-                sampleMode={sampleMode}
-                onSampleModeChange={setSampleMode}
-                onConnected={() => load(false)}
-                onWorkdayImported={importWorkdayCourses}
-              />
+              <AppButton onClick={() => setActiveNav("Settings")} className="toggle-pill w-full justify-center">
+                Manage connections in Settings
+              </AppButton>
             </aside>
           </div>
           </>
