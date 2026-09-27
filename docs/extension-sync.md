@@ -1,0 +1,75 @@
+# Browser extension sync (Issue #82)
+
+This is the single-user, installed-browser path. The extension core handles
+tab selection, scheduled capture, local storage, and eventual Vercel upload
+for every registered provider. Each provider supplies its own capture file.
+The verified capture today reads Canvas JSON in a tab where the student has
+signed in, selects only fields required by `hub.canvas.parse_capture()`, and
+keeps that capture in extension-local storage.
+It never reads a CWL password or copies an LMS cookie, token, or calendar-feed
+URL to Vercel.
+
+## Try local capture
+
+1. In Chromium, open `chrome://extensions`, enable Developer mode, and load
+   `extension/` as an unpacked extension.
+2. Sign in to `https://canvas.ubc.ca` yourself in a normal tab.
+3. Open the **UBC Hub Sync** popup, select Canvas, and press **Sync selected provider**. The
+   popup reports whether capture and Vercel normalization succeeded. If no Canvas tab is open, it
+   opens one; sign in there and press Sync again.
+
+The `/api/normalize` route must be deployed before the Vercel step can pass.
+Until then, a failed normalization still leaves the sanitized capture in
+extension-local storage; the popup reports the HTTP failure.
+
+The extension also attempts a capture for each registered provider every 30
+minutes while Chrome and an already-open provider tab are available. It POSTs
+the capture to Vercel's stateless `/api/normalize`, which calls the provider's
+existing Python adapter and returns shared-model rows with `stored: false`.
+Captures and normalized rows stay in `chrome.storage.local` under
+`latestCaptures` and `latestModels`, keyed by provider, with access limited to
+trusted extension contexts. They are removed when the extension is removed.
+
+## Provider coverage
+
+| Provider | Extension capture | Reason |
+| --- | --- | --- |
+| Canvas | Implemented, fixture-tested; live account verification pending | JSON endpoints and shared-model mapper are already in `hub/canvas.py` |
+| Moodle, Blackboard, Google Classroom, Ed, Piazza | Pending | Their repo adapters are unmerged or unverified; each needs a checked browser capture path |
+| PrairieLearn | Pending policy decision | Existing adapter reads logged-in HTML; AGENTS.md permits only JSON behind CWL |
+| Workday | Separate hosted import | The existing site imports the student's Excel export in the browser |
+| Bookstore, key dates | No extension needed | Public/static sources can be fetched without a student login |
+
+Adding a verified provider means providing its browser capture, registering
+its origin and script in `extension/providers.js`, adding a narrow manifest
+host permission, and implementing `parse_capture()` inside the provider's
+existing `hub/<provider>.py` adapter. `hub.captures.parse()` dispatches to that
+adapter; the extension transport does not branch on the provider name. A
+registry entry without a working capture and parser is not considered support.
+
+## Hosted upload contract
+
+The extension is prepared to POST normalized rows to
+`https://hello-hacks26.vercel.app/api/sync` with a Hub-specific bearer key set
+in its popup. That key is distinct from all LMS credentials. The upload route
+and durable hosted database are **not deployed yet**. Do not put a key in the
+extension until the route, key provisioning, and store exist. Without a key,
+the popup accurately says the capture is local only.
+
+The eventual endpoint must authenticate the upload, cap the request at 1 MB,
+validate the shared-model rows, and upsert by `(source, url)` into
+private durable storage. Dashboard reads need separate authentication. A
+serverless SQLite file is not durable on Vercel.
+
+Terrace's PM agent reported on PR #81 that no hosted database is known to be
+connected and that choosing/provisioning one is held for Terrace. This
+installed extension does not close the no-download goal in Issue #76.
+
+## Tests
+
+`node --test extension/*.test.mjs` checks capture minimization, same-origin
+pagination, another provider's dispatch, the Vercel upload request, and
+local-only behavior without a key.
+`uv run pytest tests/test_web_normalize.py tests/test_captures.py
+tests/test_canvas.py` checks the Vercel route and server-side mapping into the
+shared model. None of these tests needs a live LMS account.
