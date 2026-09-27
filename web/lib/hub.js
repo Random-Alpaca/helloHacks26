@@ -233,10 +233,23 @@ export function isOverdue(item, now) {
   return item.due && new Date(item.due) < now;
 }
 
+// Identity for an Item with no id of its own - rule 4's (source, url),
+// same key mergeItems already upserts by. Shared here so a client-only
+// "mark as done" override (manuallyDoneKeys) can key off the same identity
+// without inventing a second one.
+export function itemKey(item) {
+  return `${item.source} ${item.url}`;
+}
+
 // Completed items never show, regardless of Hide overdue - matches app.py's
-// df2e178 rule exactly. Prefer the backend's status; fall back to the raw
-// done flag if status hasn't arrived yet.
-export function isDone(item) {
+// df2e178 rule exactly. A manual check-off (manuallyDoneKeys, a student
+// crossing something off their own dashboard - #98) wins outright: it's a
+// personal, client-only override that never reaches Canvas/PrairieLearn/
+// Workday, so it must never depend on what the backend's own status says.
+// Otherwise, prefer the backend's status; fall back to the raw done flag
+// if status hasn't arrived yet.
+export function isDone(item, manuallyDoneKeys = []) {
+  if (manuallyDoneKeys.includes(itemKey(item))) return true;
   if (item.status) return item.status === "done";
   return Boolean(item.done);
 }
@@ -287,9 +300,23 @@ export function mergeCourses(base, incoming) {
 // calendar-feed's fetched items (#47) sitting alongside whatever
 // fetchUpcoming() already loaded.
 export function mergeItems(base, incoming) {
-  const byKey = new Map(base.map((i) => [`${i.source} ${i.url}`, i]));
+  const byKey = new Map(base.map((i) => [itemKey(i), i]));
   for (const i of incoming) {
-    byKey.set(`${i.source} ${i.url}`, i);
+    byKey.set(itemKey(i), i);
+  }
+  return Array.from(byKey.values());
+}
+
+// Merge recurring class meetings (#85) - Meeting has no (source, url)
+// identity like an Item, so the closest natural key is the same one
+// hub/db.py's `meetings` table uses: course + kind + its specific weekly
+// slot (days + start time), so re-importing an updated export replaces a
+// changed meeting instead of duplicating it.
+export function mergeMeetings(base, incoming) {
+  const key = (m) => `${m.course} ${m.kind} ${m.days.join(",")} ${m.startTime}`;
+  const byKey = new Map(base.map((m) => [key(m), m]));
+  for (const m of incoming) {
+    byKey.set(key(m), m);
   }
   return Array.from(byKey.values());
 }
@@ -350,8 +377,8 @@ export async function fetchHostedStore() {
 // Completed items never show anywhere, regardless of Hide overdue (matches
 // app.py's df2e178 rule) - applied once so every tab and the Courses tab's
 // per-course lists see the same set.
-export function selectActiveItems(items) {
-  return items.filter((item) => !isDone(item));
+export function selectActiveItems(items, manuallyDoneKeys = []) {
+  return items.filter((item) => !isDone(item, manuallyDoneKeys));
 }
 
 // A hidden course (Settings - for the old/inactive enrollments Canvas keeps
@@ -441,6 +468,58 @@ export function selectItemsDueOn(items, date) {
   return sortItems(items.filter((item) => item.due && sameDay(new Date(item.due), date)));
 }
 
+const JS_DAY_TO_CODE = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"]; // Date#getDay(): 0=Sunday
+
+function localISODate(date) {
+  // Local calendar date, not date.toISOString() (which is UTC and can land
+  // on the wrong day near midnight) - matches the "YYYY-MM-DD" termStart/
+  // termEnd strings parseWorkdaySchedule produces, so a plain string
+  // comparison is enough to check whether `date` falls in a Meeting's term.
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+// A real Workday export carries every term the student has ever had a
+// schedule for (Term 1 and Term 2 both show up in the same "Meeting
+// Patterns" column), each meeting tagged with its own real term_start/
+// term_end - so a weekly-template view (the Schedule tab) needs this filter
+// just as much as a specific clicked date does, or a Term 1 course that
+// ended weeks ago still shows up mixed in with current Term 2 ones.
+export function selectCurrentTermMeetings(meetings, now) {
+  const iso = localISODate(now);
+  return meetings.filter((m) => iso >= m.termStart && iso <= m.termEnd);
+}
+
+// A recurring class Meeting has no single date, just a day-of-week + a term
+// range - this is the Calendar page's per-day equivalent of selectItemsDueOn,
+// for the Workday schedule side panel on a clicked day.
+export function selectMeetingsOn(meetings, date) {
+  const code = JS_DAY_TO_CODE[date.getDay()];
+  return selectCurrentTermMeetings(meetings, date)
+    .filter((m) => m.days.includes(code))
+    .sort((a, b) => a.startTime.localeCompare(b.startTime));
+}
+
+// The Calendar day panel's actual content: that day's Workday class
+// meetings AND its due items, woven into one chronological list (not two
+// separate stacked lists) - "what does my day look like", classes and
+// deadlines together in the order they'd actually happen. Each entry keeps
+// its original shape under `meeting`/`item` so the caller can render either
+// kind; `time` is "HH:MM" for both, so a plain string sort interleaves them
+// correctly (a due item's time comes from its own due instant, not
+// selectItemsDueOn's urgency-first order).
+export function selectDaySchedule(items, meetings, date) {
+  const meetingEntries = selectMeetingsOn(meetings, date).map((meeting) => ({ kind: "meeting", time: meeting.startTime, meeting }));
+  const itemEntries = selectItemsDueOn(items, date).map((item) => {
+    const due = new Date(item.due);
+    const time = `${String(due.getHours()).padStart(2, "0")}:${String(due.getMinutes()).padStart(2, "0")}`;
+    return { kind: "item", time, item };
+  });
+  return [...meetingEntries, ...itemEntries].sort((a, b) => a.time.localeCompare(b.time));
+}
+
 // What Settings' Connections list needs: one row per known provider, derived
 // from the data actually on hand rather than a separately-tracked "connected"
 // flag (sample data never sets item.source, so it correctly shows as
@@ -456,7 +535,7 @@ function countOf(n, noun) {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
-export function selectConnections(items, importedCourses) {
+export function selectConnections(items, meetings) {
   const countBySource = (source) => items.filter((item) => item.source === source).length;
   const rows = KNOWN_PROVIDERS.map(({ id, label }) => ({ id, label, connected: countBySource(id) > 0, detail: countOf(countBySource(id), "item") }));
 
@@ -474,6 +553,6 @@ export function selectConnections(items, importedCourses) {
     rows.push({ id: source, label: `PrairieLearn (${host})`, connected: true, detail: countOf(countBySource(source), "item") });
   }
 
-  rows.push({ id: "workday", label: "Workday", connected: importedCourses.length > 0, detail: `${countOf(importedCourses.length, "course")} imported` });
+  rows.push({ id: "workday", label: "Workday", connected: meetings.length > 0, detail: countOf(meetings.length, "class meeting") });
   return rows;
 }

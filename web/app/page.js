@@ -18,8 +18,10 @@ import {
   isDone,
   isLocalMode,
   isOverdue,
+  itemKey,
   mergeCourses,
   mergeItems,
+  mergeMeetings,
   monthGrid,
   PREFERRED_KIND_OPTIONS,
   readPreferredKindsCookie,
@@ -27,6 +29,8 @@ import {
   selectConnections,
   selectCourseItems,
   selectItemsDueOn,
+  selectCurrentTermMeetings,
+  selectDaySchedule,
   selectNextUp,
   selectVisibleCourses,
   selectVisibleItems,
@@ -35,7 +39,7 @@ import {
   weekDates,
   writePreferredKindsCookie,
 } from "../lib/hub";
-import { parseWorkdayCourses } from "../lib/workday";
+import { parseWorkdaySchedule } from "../lib/workday";
 
 function Icon({ name, className = "size-5" }) {
   const paths = {
@@ -63,10 +67,63 @@ const NAV_ITEMS = [
   { label: "Overview", icon: "home", tab: "all" },
   { label: "Assignments", icon: "tasks", tab: "task" },
   { label: "Calendar", icon: "calendar", tab: "deadline" },
+  { label: "Schedule", icon: "clock", tab: "schedule" },
   { label: "Materials", icon: "material", tab: "material" },
   { label: "Announcements", icon: "announcement", tab: "announcements" },
   { label: "Courses", icon: "courses", tab: "courses" },
 ];
+
+const WEEKDAY_CODES = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
+const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// A recurring weekly timetable (#85) - deliberately not tied to any specific
+// calendar week, unlike the Calendar tab's month grid: a Meeting has no
+// single date, just a day-of-week + time slot that repeats all term.
+function ScheduleView({ meetings, now }) {
+  if (meetings.length === 0) {
+    return (
+      <div className="p-10 text-center text-sm text-[var(--muted)]">
+        No class schedule yet - import your Workday &quot;Current Schedule&quot; export in Settings.
+      </div>
+    );
+  }
+  // A real Workday export carries every term the student's ever had a
+  // schedule for (Term 1 and Term 2 both show up in the same file) - only
+  // show what's actually running right now, or a Term 1 course that ended
+  // weeks ago stays mixed in with current Term 2 ones.
+  const currentMeetings = selectCurrentTermMeetings(meetings, now);
+  if (currentMeetings.length === 0) {
+    return (
+      <div className="p-10 text-center text-sm text-[var(--muted)]">
+        No classes running right now - {meetings.length} meeting{meetings.length === 1 ? "" : "s"} imported, but none in the current term.
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-7 sm:p-6">
+      {WEEKDAY_CODES.map((code, i) => {
+        const dayMeetings = currentMeetings
+          .filter((m) => m.days.includes(code))
+          .sort((a, b) => a.startTime.localeCompare(b.startTime));
+        return (
+          <div key={code}>
+            <div className="mb-2 text-xs font-bold uppercase tracking-wide text-[var(--muted)]">{WEEKDAY_NAMES[i]}</div>
+            <div className="space-y-2">
+              {dayMeetings.map((m, idx) => (
+                <div key={idx} className="rounded-lg border border-[var(--line)] bg-[var(--surface-soft)] p-2.5">
+                  <div className="truncate text-xs font-bold">{m.course}</div>
+                  <div className="mt-0.5 text-[0.7rem] text-[var(--muted)]">{m.kind} &middot; {m.startTime}&ndash;{m.endTime}</div>
+                  {m.location && <div className="truncate text-[0.7rem] text-[var(--muted)]">{m.location}</div>}
+                </div>
+              ))}
+              {dayMeetings.length === 0 && <div className="text-[0.7rem] text-[var(--muted-light)]">&mdash;</div>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 const THEMES = [
   { id: "everforest", label: "Everforest" },
@@ -94,10 +151,12 @@ const MONTH_WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 // date, plus the clicked day's items below. Owns its own displayed-month and
 // selected-day state rather than lifting it into App(), since nothing else
 // in the app needs to know which day is selected here.
-function CalendarSection({ items, now }) {
+function CalendarSection({ items, meetings, now, onToggleItemDone }) {
   const [monthDate, setMonthDate] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
+  const [selectedDate, setSelectedDate] = useState(null);
 
   const weeks = useMemo(() => monthGrid(monthDate), [monthDate]);
+  const daySchedule = useMemo(() => (selectedDate ? selectDaySchedule(items, meetings, selectedDate) : []), [items, meetings, selectedDate]);
 
   function shiftMonth(delta) {
     setMonthDate((d) => new Date(d.getFullYear(), d.getMonth() + delta, 1));
@@ -127,39 +186,90 @@ function CalendarSection({ items, now }) {
         </div>
       </div>
 
-      <div className="p-5 sm:p-6">
-        <div className="grid grid-cols-7 gap-1 text-center">
-          {MONTH_WEEKDAY_LABELS.map((label) => (
-            <div key={label} className="pb-2 text-[0.65rem] font-bold text-[var(--muted)]">{label}</div>
-          ))}
+      <div className="flex flex-col gap-6 p-5 sm:flex-row sm:p-6">
+        <div className="min-w-0 flex-1">
+          <div className="grid grid-cols-7 gap-1 text-center">
+            {MONTH_WEEKDAY_LABELS.map((label) => (
+              <div key={label} className="pb-2 text-[0.65rem] font-bold text-[var(--muted)]">{label}</div>
+            ))}
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {weeks.flat().map(({ date, inMonth }) => {
+              const dueCount = selectItemsDueOn(items, date).length;
+              const isToday = date.toDateString() === now.toDateString();
+              const isSelected = selectedDate && date.toDateString() === selectedDate.toDateString();
+              return (
+                <button
+                  key={date.toISOString()}
+                  type="button"
+                  aria-label={date.toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" })}
+                  onClick={() => setSelectedDate(date)}
+                  className={`flex aspect-square flex-col items-center justify-center gap-1 rounded-lg text-sm font-semibold transition-colors hover:bg-[var(--surface-soft)] ${
+                    inMonth ? "text-[var(--ink)]" : "text-[var(--muted-light)]"
+                  } ${isToday ? "bg-[var(--accent-soft)] text-[var(--accent)]" : ""} ${
+                    isSelected ? "ring-2 ring-[var(--accent)] ring-inset" : ""
+                  }`}
+                >
+                  <span>{date.getDate()}</span>
+                  {dueCount > 0 && <span className="size-1.5 rounded-full bg-[var(--accent)]" />}
+                </button>
+              );
+            })}
+          </div>
         </div>
-        <div className="grid grid-cols-7 gap-1">
-          {weeks.flat().map(({ date, inMonth }) => {
-            const dueCount = selectItemsDueOn(items, date).length;
-            const isToday = date.toDateString() === now.toDateString();
-            return (
-              <div
-                key={date.toISOString()}
-                className={`flex aspect-square flex-col items-center justify-center gap-1 rounded-lg text-sm font-semibold ${
-                  inMonth ? "text-[var(--ink)]" : "text-[var(--muted-light)]"
-                } ${isToday ? "bg-[var(--accent-soft)] text-[var(--accent)]" : ""}`}
-              >
-                <span>{date.getDate()}</span>
-                {dueCount > 0 && <span className="size-1.5 rounded-full bg-[var(--accent)]" />}
+
+        {selectedDate && (
+          <div className="w-full shrink-0 rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4 sm:w-64">
+            <div className="mb-3 flex items-start justify-between gap-2">
+              <div className="text-sm font-bold">
+                {selectedDate.toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" })}
               </div>
-            );
-          })}
-        </div>
+              <AppButton ariaLabel="Close daily schedule" onClick={() => setSelectedDate(null)} className="icon-button">
+                <span className="block text-xs font-bold leading-none">&times;</span>
+              </AppButton>
+            </div>
+            <div className="space-y-2">
+              {daySchedule.length === 0 ? (
+                <div className="text-xs text-[var(--muted)]">Nothing scheduled or due this day.</div>
+              ) : (
+                daySchedule.map((entry, idx) =>
+                  entry.kind === "meeting" ? (
+                    <div key={idx} className="rounded-lg border border-[var(--line)] bg-[var(--surface)] p-2.5">
+                      <div className="truncate text-xs font-bold">{entry.meeting.course}</div>
+                      <div className="mt-0.5 text-[0.7rem] text-[var(--muted)]">{entry.meeting.kind} &middot; {entry.meeting.startTime}&ndash;{entry.meeting.endTime}</div>
+                      {entry.meeting.location && <div className="truncate text-[0.7rem] text-[var(--muted)]">{entry.meeting.location}</div>}
+                    </div>
+                  ) : (
+                    <div key={idx} className="flex items-start gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-2.5">
+                      <input
+                        type="checkbox"
+                        aria-label={`Mark "${entry.item.title}" as done`}
+                        onChange={() => onToggleItemDone(entry.item)}
+                        className="mt-0.5 size-4 shrink-0 cursor-pointer accent-[var(--accent)]"
+                      />
+                      <a href={entry.item.url} className="min-w-0 flex-1">
+                        <div className="truncate text-xs font-bold">{entry.item.title}</div>
+                        <div className="mt-0.5 text-[0.7rem] text-[var(--muted)]">{entry.item.kind} &middot; due {entry.time}</div>
+                        <div className="truncate text-[0.7rem] text-[var(--muted)]">{entry.item.course}</div>
+                      </a>
+                    </div>
+                  ),
+                )
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </>
   );
 }
 
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind }) {
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind, onConnectHosted, hostedConnected }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
   const [customDomain, setCustomDomain] = useState("");
   const [feedUrlInput, setFeedUrlInput] = useState("");
+  const [hostedKeyInput, setHostedKeyInput] = useState("");
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
   const byId = Object.fromEntries(connections.map((c) => [c.id, c]));
@@ -181,9 +291,17 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
     }
     try {
       const buf = await file.arrayBuffer();
-      const imported = parseWorkdayCourses(buf, term);
-      onWorkdayImported(imported);
-      setWorkdayStatus(`Imported ${imported.length} course${imported.length === 1 ? "" : "s"}.`);
+      // Workday feeds the Schedule tab only, not the course list - Canvas/
+      // PrairieLearn are the only sources with real assignment data, and a
+      // Workday-only course (no items ever attached to it) showing up in
+      // the sidebar/Courses tab would be misleading, not useful.
+      const scheduleImported = parseWorkdaySchedule(buf, term);
+      onScheduleImported(scheduleImported);
+      setWorkdayStatus(
+        scheduleImported.length > 0
+          ? `Loaded ${scheduleImported.length} class meeting${scheduleImported.length === 1 ? "" : "s"}.`
+          : "No class meetings found in that file.",
+      );
     } catch (err) {
       setWorkdayStatus(null);
       setError(err.message);
@@ -275,6 +393,42 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
           <span>Sample data</span>
           <input type="checkbox" checked={sampleMode} onChange={(e) => onSampleModeChange(e.target.checked)} />
         </label>
+
+        {!isLocalMode() && (
+          <div className="mb-5 rounded-xl border border-[var(--line)] bg-[var(--surface-soft)] p-4">
+            {hostedConnected ? (
+              <div className="text-sm font-bold text-[var(--success)]">Hub connected - showing your synced data.</div>
+            ) : (
+              <>
+                <div className="mb-2 text-sm font-bold">Paste your hub sync key</div>
+                <div className="mb-3 text-xs text-[var(--muted)]">
+                  Open the UBC Hub browser extension&apos;s popup and copy its &quot;Hub sync key&quot; field.
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={hostedKeyInput}
+                    onChange={(e) => setHostedKeyInput(e.target.value)}
+                    placeholder="Sync key from the extension"
+                    aria-label="Hub sync key"
+                    className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 py-1 text-xs"
+                  />
+                  <AppButton
+                    disabled={busy !== null || !hostedKeyInput}
+                    onClick={() => run("hosted", async () => {
+                      const hasData = await onConnectHosted(hostedKeyInput.trim());
+                      setHostedKeyInput("");
+                      if (!hasData) setError("Connected, but no data has synced from the extension yet.");
+                    })}
+                    className="toggle-pill"
+                  >
+                    {busy === "hosted" ? "Connecting…" : "Connect"}
+                  </AppButton>
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         <div className="divide-y divide-[var(--line)]">
           <div className="flex flex-wrap items-center justify-between gap-3 py-3">
@@ -414,7 +568,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
               <span className={`size-2.5 rounded-full ${byId.workday.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
               <div>
                 <div className="font-bold">Workday</div>
-                <div className="text-xs text-[var(--muted)]">{byId.workday.connected ? "Imported" : "Not imported"} &middot; {byId.workday.detail}</div>
+                <div className="text-xs text-[var(--muted)]">{byId.workday.connected ? "Loaded" : "Not loaded"} &middot; {byId.workday.detail}</div>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -494,9 +648,10 @@ export default function App() {
   const [items, setItems] = useState([]);
   const [announcements, setAnnouncements] = useState([]);
   const [fetchedCourses, setFetchedCourses] = useState([]);
-  const [importedCourses, setImportedCourses] = useState([]);
+  const [meetings, setMeetings] = useState([]);
   const [loadError, setLoadError] = useState(null);
   const [hiddenCourses, setHiddenCourses] = useState([]);
+  const [manuallyDoneKeys, setManuallyDoneKeys] = useState([]);
   const [canvasFeedUrl, setCanvasFeedUrl] = useState("");
   const [feedItems, setFeedItems] = useState([]);
   const [feedError, setFeedError] = useState(null);
@@ -525,6 +680,15 @@ export default function App() {
     } catch {
       // ignore malformed/missing storage - keep the default (nothing hidden)
     }
+    try {
+      // A student's own "I did this" checkbox (#98) - purely local, never
+      // sent anywhere, and never changes what Canvas/PrairieLearn/Workday
+      // themselves think happened.
+      const saved = JSON.parse(localStorage.getItem("gather-manually-done"));
+      if (Array.isArray(saved)) setManuallyDoneKeys(saved);
+    } catch {
+      // ignore malformed/missing storage - keep the default (nothing checked off)
+    }
     setPreferredKinds(readPreferredKindsCookie());
     // The feed URL is a secret (works like a password) - localStorage only,
     // never sent anywhere but /api/feed. Re-fetches automatically on every
@@ -550,15 +714,12 @@ export default function App() {
     // provisioned, 401 with no session) silently leaves the dashboard as is.
     if (!isLocalMode()) {
       const syncKey = syncKeyFromHash(window.location.hash);
-      if (syncKey) history.replaceState(null, "", window.location.pathname + window.location.search);
-      (syncKey ? startHostedSession(syncKey) : Promise.resolve())
-        .then(fetchHostedStore)
-        .then((store) => {
-          if (!store) return;
-          setStoreItems(store.items);
-          setStoreCourses(store.courses);
-        })
-        .catch(() => {});
+      if (syncKey) {
+        history.replaceState(null, "", window.location.pathname + window.location.search);
+        connectHostedStore(syncKey).catch(() => {});
+      } else {
+        fetchHostedStore().then(applyHostedStore).catch(() => {});
+      }
     }
   }, []);
 
@@ -585,9 +746,17 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("gather-hidden-courses", JSON.stringify(hiddenCourses));
   }, [hiddenCourses]);
+  useEffect(() => {
+    localStorage.setItem("gather-manually-done", JSON.stringify(manuallyDoneKeys));
+  }, [manuallyDoneKeys]);
 
   function toggleCourseHidden(code, visible) {
     setHiddenCourses((prev) => (visible ? prev.filter((c) => c !== code) : [...prev, code]));
+  }
+
+  function toggleItemDone(item) {
+    const key = itemKey(item);
+    setManuallyDoneKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
   }
 
   async function connectCanvasFeed(url) {
@@ -643,8 +812,25 @@ export default function App() {
     }
   }
 
-  function importWorkdayCourses(imported) {
-    setImportedCourses((prev) => mergeCourses(prev, imported));
+  function importWorkdaySchedule(imported) {
+    setMeetings((prev) => mergeMeetings(prev, imported));
+  }
+
+  function applyHostedStore(store) {
+    if (!store) return false;
+    setStoreItems(store.items);
+    setStoreCourses(store.courses);
+    // A real sync means there's real data to show - don't make the student
+    // also find and flip the Sample data toggle themselves.
+    const hasData = store.items.length > 0 || store.courses.length > 0;
+    if (hasData) setSampleMode(false);
+    return hasData;
+  }
+
+  async function connectHostedStore(key) {
+    const ok = await startHostedSession(key);
+    if (!ok) throw new Error("That sync key wasn't accepted.");
+    return applyHostedStore(await fetchHostedStore());
   }
 
   useEffect(() => {
@@ -653,11 +839,11 @@ export default function App() {
   }, [sampleMode]);
 
   const now = new Date();
-  const allCourses = mergeCourses(mergeCourses(fetchedCourses, storeCourses), importedCourses);
+  const allCourses = mergeCourses(fetchedCourses, storeCourses);
   const courses = selectVisibleCourses(allCourses, hiddenCourses);
   const allItems = mergeItems(mergeItems(items, storeItems), feedItems);
-  const activeItems = hideCourseItems(selectActiveItems(allItems), hiddenCourses);
-  const doneCount = hideCourseItems(allItems, hiddenCourses).filter(isDone).length;
+  const activeItems = hideCourseItems(selectActiveItems(allItems, manuallyDoneKeys), hiddenCourses);
+  const doneCount = hideCourseItems(allItems, hiddenCourses).filter((item) => isDone(item, manuallyDoneKeys)).length;
   const overdueCount = activeItems.filter((item) => isOverdue(item, now)).length;
   const dueThisWeekCount = activeItems.filter((item) => {
     if (!item.due) return false;
@@ -687,7 +873,7 @@ export default function App() {
   const topAssignments = selectVisibleItems(activeItems, { tab: "all", hideOverdue: false, showN: 5, now, preferredKinds });
   const nextUp = selectNextUp(activeItems, preferredKinds);
   const days = weekDates(now);
-  const connections = selectConnections(allItems, importedCourses);
+  const connections = selectConnections(allItems, meetings);
 
   const customStyle = theme === "custom"
     ? { "--page": customColors.page, "--surface": customColors.surface, "--ink": customColors.ink, "--accent": customColors.accent }
@@ -764,7 +950,7 @@ export default function App() {
               sampleMode={sampleMode}
               onSampleModeChange={setSampleMode}
               onConnected={() => load(false)}
-              onWorkdayImported={importWorkdayCourses}
+              onScheduleImported={importWorkdaySchedule}
               allCourses={allCourses}
               hiddenCourses={hiddenCourses}
               onToggleCourseHidden={toggleCourseHidden}
@@ -775,7 +961,17 @@ export default function App() {
               onDisconnectFeed={disconnectCanvasFeed}
               preferredKinds={preferredKinds}
               onTogglePreferredKind={togglePreferredKind}
+              onConnectHosted={connectHostedStore}
+              hostedConnected={storeItems.length > 0 || storeCourses.length > 0}
             />
+          ) : activeNav === "Schedule" ? (
+            <section className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-card)]">
+              <div className="border-b border-[var(--line)] p-5 sm:p-6">
+                <div className="text-xl font-bold tracking-tight">Weekly schedule</div>
+                <div className="mt-1 text-sm text-[var(--muted)]">Your recurring class meetings, from Workday</div>
+              </div>
+              <ScheduleView meetings={meetings} now={now} />
+            </section>
           ) : (
           <>
           <section className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
@@ -794,35 +990,37 @@ export default function App() {
 
           {loadError && <p className="connect-error mb-4">Couldn&apos;t load: {loadError}</p>}
 
-          <section className="mb-8 grid gap-4 sm:grid-cols-3">
-            <div className="stat-card stat-card-featured">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="text-sm font-semibold text-white/70">Due this week</div>
-                  <div className="mt-3 text-4xl font-bold tracking-tight">{dueThisWeekCount}</div>
+          {activeNav !== "Calendar" && (
+            <section className="mb-8 grid gap-4 sm:grid-cols-3">
+              <div className="stat-card stat-card-featured">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-white/70">Due this week</div>
+                    <div className="mt-3 text-4xl font-bold tracking-tight">{dueThisWeekCount}</div>
+                  </div>
+                  <div className="rounded-xl bg-white/10 p-2.5"><Icon name="tasks" /></div>
                 </div>
-                <div className="rounded-xl bg-white/10 p-2.5"><Icon name="tasks" /></div>
               </div>
-            </div>
-            <div className="stat-card">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="text-sm font-semibold text-[var(--muted)]">Completed</div>
-                  <div className="mt-3 text-4xl font-bold tracking-tight">{doneCount}</div>
+              <div className="stat-card">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-[var(--muted)]">Completed</div>
+                    <div className="mt-3 text-4xl font-bold tracking-tight">{doneCount}</div>
+                  </div>
+                  <div className="rounded-xl bg-[var(--success-soft)] p-2.5 text-[var(--success)]"><Icon name="check" /></div>
                 </div>
-                <div className="rounded-xl bg-[var(--success-soft)] p-2.5 text-[var(--success)]"><Icon name="check" /></div>
               </div>
-            </div>
-            <div className="stat-card">
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="text-sm font-semibold text-[var(--muted)]">Overdue</div>
-                  <div className="mt-3 text-4xl font-bold tracking-tight">{overdueCount}</div>
+              <div className="stat-card">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-[var(--muted)]">Overdue</div>
+                    <div className="mt-3 text-4xl font-bold tracking-tight">{overdueCount}</div>
+                  </div>
+                  <div className="rounded-xl bg-[var(--danger-soft)] p-2.5 text-[var(--danger)]"><Icon name="clock" /></div>
                 </div>
-                <div className="rounded-xl bg-[var(--danger-soft)] p-2.5 text-[var(--danger)]"><Icon name="clock" /></div>
               </div>
-            </div>
-          </section>
+            </section>
+          )}
 
           <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_19rem]">
             <section className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-card)]">
@@ -838,6 +1036,12 @@ export default function App() {
                   <div>
                     {topAssignments.map((item) => (
                       <div key={item.id} className="assignment-row">
+                        <input
+                          type="checkbox"
+                          aria-label={`Mark "${item.title}" as done`}
+                          onChange={() => toggleItemDone(item)}
+                          className="size-4 shrink-0 cursor-pointer accent-[var(--accent)]"
+                        />
                         <span className="course-mark">{item.course.slice(0, 2)}</span>
                         <div className="min-w-0 flex-1">
                           <div className="truncate font-bold">
@@ -866,7 +1070,7 @@ export default function App() {
                   </div>
                 </>
               ) : activeNav === "Calendar" ? (
-                <CalendarSection items={activeItems} now={now} />
+                <CalendarSection items={activeItems} meetings={meetings} now={now} onToggleItemDone={toggleItemDone} />
               ) : (
               <>
               <div className="flex flex-col gap-4 border-b border-[var(--line)] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
@@ -950,6 +1154,12 @@ export default function App() {
                         </div>
                         {selectCourseItems(activeItems, course.code, preferredKinds).map((item) => (
                           <div key={item.id} className={`assignment-row ${isOverdue(item, now) ? "due-now" : ""}`}>
+                            <input
+                              type="checkbox"
+                              aria-label={`Mark "${item.title}" as done`}
+                              onChange={() => toggleItemDone(item)}
+                              className="size-4 shrink-0 cursor-pointer accent-[var(--accent)]"
+                            />
                             <span className="course-mark">{item.course.slice(0, 2)}</span>
                             <div className="min-w-0 flex-1">
                               <div className="truncate font-bold">
@@ -968,6 +1178,12 @@ export default function App() {
                   <>
                     {visible.map((item) => (
                       <div key={item.id} className="assignment-row">
+                        <input
+                          type="checkbox"
+                          aria-label={`Mark "${item.title}" as done`}
+                          onChange={() => toggleItemDone(item)}
+                          className="size-4 shrink-0 cursor-pointer accent-[var(--accent)]"
+                        />
                         <span className="course-mark">{item.course.slice(0, 2)}</span>
                         <div className="min-w-0 flex-1">
                           <div className="truncate font-bold">

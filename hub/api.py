@@ -84,6 +84,18 @@ def _announcements(conn):
     return [_row_to_dict(r, now) for r in db.undated(conn) if r[2] == "announcement"]
 
 
+def _schedule(conn):
+    """Every recurring class meeting, JSON-ready. No status/urgency here -
+    those are Item concepts (due-date-relative); a meeting recurs all term,
+    so "overdue"/"soon" doesn't apply to it."""
+    return [
+        {"course": code, "kind": kind, "days": days.split(","), "start_time": start_time,
+         "end_time": end_time, "location": location, "term_start": term_start,
+         "term_end": term_end, "source": source}
+        for code, kind, days, start_time, end_time, location, term_start, term_end, source in db.schedule(conn)
+    ]
+
+
 class Handler(BaseHTTPRequestHandler):
     def _cors_origin(self):
         origin = self.headers.get("Origin")
@@ -134,6 +146,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path.startswith("/calendar/") and path.endswith(".ics"):
             kind = path[len("/calendar/"):-len(".ics")]
             self._ics(export_ics.to_ics(_all_items(db.connect()), kind=kind))
+        elif path == "/api/schedule":
+            self._json(_schedule(db.connect()))
         elif path in ("/", "/index.html"):
             self._serve_file(UI_DIR / "index.html", "text/html")
         else:
