@@ -73,24 +73,29 @@ function normaliseApiItem(row, i) {
     title: row.title,
     due: row.due,
     url: row.url,
+    source: row.source,
     done: row.done ?? null,
     urgency: row.urgency ?? undefined,
     status: row.status ?? undefined,
   };
 }
 
-export async function fetchUpcoming() {
+// useSample forces sample data even when a local API is configured - this is
+// the "Sample data" toggle (app.py parity), not just the env var. The env
+// var controls whether local mode is *possible* at all (and so whether the
+// toggle/Connect buttons show); the toggle controls what's actually fetched.
+export async function fetchUpcoming(useSample) {
   const base = apiBase();
-  if (!base) return sampleItems();
+  if (!base || useSample) return sampleItems();
   const res = await fetch(`${base}/api/upcoming`);
   if (!res.ok) throw new Error(`GET /api/upcoming failed: ${res.status}`);
   const rows = await res.json();
   return rows.map(normaliseApiItem);
 }
 
-export async function fetchCourses() {
+export async function fetchCourses(useSample) {
   const base = apiBase();
-  if (!base) return SAMPLE_COURSES;
+  if (!base || useSample) return SAMPLE_COURSES;
   const res = await fetch(`${base}/api/courses`);
   if (!res.ok) throw new Error(`GET /api/courses failed: ${res.status}`);
   return res.json();
@@ -139,4 +144,110 @@ export function isOverdue(item, now) {
 export function isDone(item) {
   if (item.status) return item.status === "done";
   return Boolean(item.done);
+}
+
+// Display only - app.py capitalises urgency/status labels ("Overdue", not
+// "overdue"); values themselves stay lowercase everywhere else (comparisons,
+// URGENCY_ORDER, the backend's own strings).
+export function displayLabel(value) {
+  if (!value) return "—";
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+// Display only - same category as displayLabel: formats a raw value (an
+// ISO due date) for a person to read, decides nothing.
+export function formatDue(iso) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("en-CA", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+// --- Processing layer -------------------------------------------------
+// Everything below is pure: given state, compute what to render. page.js
+// owns *when* state changes (fetch, toggle, import); this owns *what the
+// data means* once you have it. Neither of these functions touches React,
+// fetch, or the DOM - they're plain data in, data out, so they're testable
+// on their own and can't reach back into component state by accident.
+
+// Merge courses by code - used both to combine fetched + imported courses
+// for rendering, and to fold a fresh import into what's already imported.
+// Workday never carries a grade, so an existing one (e.g. from Canvas)
+// isn't blanked out by a re-import.
+export function mergeCourses(base, incoming) {
+  const byCode = new Map(base.map((c) => [c.code, c]));
+  for (const c of incoming) {
+    const existing = byCode.get(c.code);
+    byCode.set(c.code, existing ? { ...existing, ...c, grade: c.grade ?? existing.grade } : c);
+  }
+  return Array.from(byCode.values());
+}
+
+// Completed items never show anywhere, regardless of Hide overdue (matches
+// app.py's df2e178 rule) - applied once so every tab and the Courses tab's
+// per-course lists see the same set.
+export function selectActiveItems(items) {
+  return items.filter((item) => !isDone(item));
+}
+
+// The flat item list for a given tab/toggle/limit combination. Expects
+// already-active (non-done) items - see selectActiveItems.
+export function selectVisibleItems(items, { tab, hideOverdue, showN, now }) {
+  return sortItems(items)
+    .filter((item) => tab === "all" || tab === "courses" || item.category === tab)
+    .filter((item) => !hideOverdue || !isOverdue(item, now))
+    .slice(0, showN);
+}
+
+// One course's own items, ranked - what the Courses tab's per-course table
+// needs. Expects already-active (non-done) items - see selectActiveItems.
+export function selectCourseItems(items, courseCode) {
+  return sortItems(items.filter((item) => item.course === courseCode));
+}
+
+// The single most urgent active item, or null. Expects already-active
+// (non-done) items - see selectActiveItems.
+export function selectNextUp(items) {
+  return sortItems(items)[0] ?? null;
+}
+
+// The 7 dates (Mon-Sun) of the week containing `now` - what a calendar-week
+// widget needs, computed rather than hardcoded so it's never stale.
+export function weekDates(now) {
+  const day = (now.getDay() + 6) % 7; // Mon=0 .. Sun=6
+  const monday = new Date(now);
+  monday.setHours(0, 0, 0, 0);
+  monday.setDate(monday.getDate() - day);
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return d;
+  });
+}
+
+// Whether any active item is due on the given calendar date (local time).
+export function hasItemDueOn(items, date) {
+  return items.some((item) => item.due && sameDay(new Date(item.due), date));
+}
+
+function sameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+// What Settings' Connections list needs: one row per known provider, derived
+// from the data actually on hand rather than a separately-tracked "connected"
+// flag (sample data never sets item.source, so it correctly shows as
+// disconnected everywhere). Workday isn't a login - it's a file the student
+// already has - so "connected" means "imported this session", not "logged in".
+export function selectConnections(items, importedCourses) {
+  const countBySource = (source) => items.filter((item) => item.source === source).length;
+  return [
+    { id: "canvas", label: "Canvas", connected: countBySource("canvas") > 0, detail: `${countBySource("canvas")} item${countBySource("canvas") === 1 ? "" : "s"}` },
+    { id: "prairielearn", label: "PrairieLearn", connected: countBySource("prairielearn") > 0, detail: `${countBySource("prairielearn")} item${countBySource("prairielearn") === 1 ? "" : "s"}` },
+    { id: "workday", label: "Workday", connected: importedCourses.length > 0, detail: `${importedCourses.length} course${importedCourses.length === 1 ? "" : "s"} imported` },
+  ];
 }
