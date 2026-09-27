@@ -1,7 +1,11 @@
 importScripts("providers.js");
-const HUB_SYNC_URL = "https://hello-hacks26.vercel.app/api/sync";
-const HUB_NORMALIZE_URL = "https://hello-hacks26.vercel.app/api/normalize";
+const DEFAULT_HUB_BASE = "https://hello-hacks26.vercel.app";
 const PROVIDERS = globalThis.HUB_PROVIDERS;
+
+async function hubBase() {
+  const {hubBase: base} = await chrome.storage.local.get("hubBase");
+  return base || DEFAULT_HUB_BASE;
+}
 
 // The upload key stays in trusted extension contexts, never in a Canvas page.
 chrome.storage.local.setAccessLevel({accessLevel: "TRUSTED_CONTEXTS"});
@@ -14,7 +18,8 @@ async function saveCapture(provider, capture) {
   const {latestCaptures = {}} = await chrome.storage.local.get("latestCaptures");
   latestCaptures[provider.id] = capture;
   await chrome.storage.local.set({latestCaptures});
-  const normalized = await fetch(HUB_NORMALIZE_URL, {
+  const base = await hubBase();
+  const normalized = await fetch(`${base}/api/normalize`, {
     method: "POST", redirect: "error",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(capture)
@@ -34,7 +39,7 @@ async function saveCapture(provider, capture) {
     await setStatus(`${provider.label} normalized by Vercel and saved locally. Hosted storage is not configured yet.`);
     return;
   }
-  const response = await fetch(HUB_SYNC_URL, {
+  const response = await fetch(`${base}/api/sync`, {
     method: "POST", redirect: "error",
     headers: {"Content-Type": "application/json", Authorization: `Bearer ${syncKey}`},
     body: JSON.stringify(model)

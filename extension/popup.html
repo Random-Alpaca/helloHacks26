@@ -9,13 +9,15 @@
   #status {min-height: 2em; color: #333;}
 </style>
 <h1>UBC Hub</h1>
+<label for="hubBase">Sync target (Vercel deployment)</label>
+<input id="hubBase" type="url" placeholder="https://hello-hacks26.vercel.app">
 <label for="provider">Provider</label>
 <select id="provider"></select>
 <label for="origin">Moodle or Blackboard site URL</label>
 <input id="origin" type="url" placeholder="https://lms.example.edu">
 <label for="key">Hub sync key (when hosted storage is ready)</label>
 <input id="key" type="password" autocomplete="off" placeholder="Optional for local capture">
-<button id="save">Save key</button>
+<button id="save">Save</button>
 <button id="sync">Sync selected provider</button>
 <p id="status" role="status"></p>
 <script src="providers.js"></script>
