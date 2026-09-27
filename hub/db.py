@@ -8,8 +8,11 @@ Textbooks get their own table since they carry ISBN/price, not a due date.
 # per source) only if we actually need to re-normalise without refetching -
 # right now every adapter is cheap enough to just re-fetch.
 """
+import os
 import re
 import sqlite3
+from dataclasses import dataclass
+from datetime import timezone
 from pathlib import Path
 
 from hub.logic import normalise_course_code
@@ -138,6 +141,8 @@ def save(conn, courses=(), items=(), textbooks=()):
     """Upsert courses, then items/textbooks matched to them by canonical
     course code (see _canonical_code) - collapses Canvas's long code,
     Workday's short one and PrairieLearn's onto the same course row."""
+    if isinstance(conn, Hosted):
+        return _hosted_save(conn, courses, items)
     ids = {_canonical_code(c.code): _course_id(conn, c) for c in courses}
     for i in items:
         conn.execute(
@@ -175,6 +180,8 @@ def upcoming(conn, category=None):
     still show up here - an INNER JOIN would silently vanish it instead of
     just showing an unknown course, and "always produce something useful,
     never refuse on partial data" is this repo's own stated rule."""
+    if isinstance(conn, Hosted):
+        return _hosted_upcoming(conn, category)
     q = ("SELECT COALESCE(courses.code, '(unknown course)'), items.category, items.kind, items.title, "
          "items.due, items.url, items.done, items.source "
          "FROM items LEFT JOIN courses ON courses.id = items.course_id "
@@ -188,6 +195,8 @@ def undated(conn, category=None):
     else without a real deadline) kept separate from upcoming()'s ranked
     list, since there's nothing to rank by. Most recently saved first. Same
     row shape as upcoming(), `due` just always reads NULL here."""
+    if isinstance(conn, Hosted):
+        raise NotImplementedError("hosted store has no undated() yet - see the Hosted ponytail below")
     q = ("SELECT courses.code, items.category, items.kind, items.title, items.due, items.url, items.done, items.source "
          "FROM items JOIN courses ON courses.id = items.course_id "
          "WHERE items.due IS NULL" + (" AND items.category = ?" if category else "") +
@@ -197,6 +206,9 @@ def undated(conn, category=None):
 
 def courses(conn):
     """Every course, e.g. for a Courses / Course-card screen."""
+    if isinstance(conn, Hosted):
+        return conn.run("SELECT code, term, title, grade FROM hosted_courses WHERE student = ? ORDER BY code",
+                        (conn.student,)).fetchall()
     return conn.execute("SELECT code, term, title, grade FROM courses ORDER BY code").fetchall()
 
 
@@ -217,3 +229,120 @@ def textbooks(conn, code=None):
          "textbooks.price, textbooks.url FROM textbooks JOIN courses ON courses.id = textbooks.course_id"
          + (" WHERE courses.code = ?" if code else "") + " ORDER BY textbooks.required DESC, textbooks.title")
     return conn.execute(q, (code,) if code else ()).fetchall()
+
+
+# --- Hosted store (web/api/sync.py, items.py) ------------------------------
+# Same public API as above (save / upcoming / by_course / courses, plus
+# wipe), but against hosted Postgres (Neon) and scoped to one `student` -
+# sha256 of the client's sync key (hub/hosted.py), never the key itself.
+# Pass a Hosted from connect_hosted() where you'd pass a sqlite3 connection
+# and the functions above dispatch here. Kept in this file (not a separate
+# pgstore.py) so "nothing else touches SQL" stays literally true.
+#
+# The SQL is deliberately portable (CREATE TABLE IF NOT EXISTS, ON CONFLICT
+# ... DO UPDATE, excluded.*, no serial ids) so tests run it against an
+# in-memory SQLite connection wrapped in Hosted(conn, student, "?") - no
+# Postgres needed. psycopg only differs in its placeholder, "%s".
+#
+# ponytail: no textbooks, no undated() - the extension's normalized body
+# (web/api/sync.py) carries only courses and items. Add a hosted_textbooks
+# table when a hosted Bookstore sync exists.
+# ponytail: upsert only - an item deleted upstream lingers until the
+# student DELETEs /api/sync. Upgrade: delete this student's rows for a
+# source that aren't in a fresh full sync of it.
+
+HOSTED_SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS hosted_courses (
+        student TEXT NOT NULL,
+        code TEXT NOT NULL,
+        term TEXT NOT NULL,
+        title TEXT NOT NULL,
+        grade REAL,
+        PRIMARY KEY (student, code, term)
+    )""",
+    """CREATE TABLE IF NOT EXISTS hosted_items (
+        student TEXT NOT NULL,
+        source TEXT NOT NULL,
+        url TEXT NOT NULL,
+        course TEXT NOT NULL,
+        category TEXT NOT NULL CHECK (category IN ('task', 'deadline', 'material')),
+        kind TEXT NOT NULL,
+        title TEXT NOT NULL,
+        due TEXT,
+        done INTEGER,
+        PRIMARY KEY (student, source, url)
+    )""",
+)
+
+
+@dataclass
+class Hosted:
+    conn: object  # a psycopg (or, in tests, sqlite3) connection
+    student: str
+    placeholder: str = "%s"
+
+    def run(self, sql, params=()):
+        return self.conn.execute(sql.replace("?", self.placeholder), params)
+
+    def close(self):
+        self.conn.close()
+
+
+def hosted_url():
+    """The Postgres URL, or None when hosted storage isn't provisioned -
+    web/api's routes then answer 503 instead of touching anything."""
+    return os.environ.get("DATABASE_URL") or None
+
+
+def connect_hosted(student, url=None):
+    import psycopg  # only web/api/requirements.txt has it; local SQLite never needs it
+
+    return init_hosted(Hosted(psycopg.connect(url or hosted_url()), student))
+
+
+def init_hosted(h):
+    for ddl in HOSTED_SCHEMA:
+        h.run(ddl)
+    h.conn.commit()
+    return h
+
+
+def _hosted_save(h, courses, items):
+    for c in courses:
+        # Same merge rules as _course_id's #41 comment: shorter title wins,
+        # a known grade survives an unknown one.
+        h.run(
+            "INSERT INTO hosted_courses (student, code, term, title, grade) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT (student, code, term) DO UPDATE SET "
+            "title=CASE WHEN length(excluded.title) < length(hosted_courses.title) "
+            "THEN excluded.title ELSE hosted_courses.title END, "
+            "grade=COALESCE(excluded.grade, hosted_courses.grade)",
+            (h.student, _canonical_code(c.code), _canonical_term(c.term), c.title, c.grade),
+        )
+    for i in items:
+        # UTC before storing, so ORDER BY due on the ISO text is chronological.
+        due = i.due.astimezone(timezone.utc).isoformat() if i.due else None
+        h.run(
+            "INSERT INTO hosted_items (student, source, url, course, category, kind, title, due, done) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (student, source, url) DO UPDATE SET course=excluded.course, "
+            "category=excluded.category, kind=excluded.kind, title=excluded.title, "
+            "due=excluded.due, done=excluded.done",
+            (h.student, i.source, i.url, _canonical_code(i.course), i.category, i.kind, i.title,
+             due, None if i.done is None else int(i.done)),
+        )
+    h.conn.commit()
+
+
+def _hosted_upcoming(h, category=None):
+    q = ("SELECT course, category, kind, title, due, url, done, source FROM hosted_items "
+         "WHERE student = ? AND due IS NOT NULL" + (" AND category = ?" if category else "") +
+         " ORDER BY due")
+    return h.run(q, (h.student, category) if category else (h.student,)).fetchall()
+
+
+def wipe(h):
+    """Delete every row this student has - DELETE /api/sync."""
+    h.run("DELETE FROM hosted_items WHERE student = ?", (h.student,))
+    h.run("DELETE FROM hosted_courses WHERE student = ?", (h.student,))
+    h.conn.commit()

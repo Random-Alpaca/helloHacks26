@@ -160,6 +160,10 @@ class Handler(BaseHTTPRequestHandler):
             self._connect(canvas.fetch)
         elif path == "/api/connect/prairielearn":
             self._connect(prairielearn.fetch)
+        elif path == "/api/connect/prairielearn_ok":
+            self._connect(lambda: prairielearn.fetch("prairielearn_ok"))
+        elif path == "/api/connect/prairielearn_custom":
+            self._connect_prairielearn_custom()
         elif path == "/api/feed":
             self._feed()
         else:
@@ -169,7 +173,9 @@ class Handler(BaseHTTPRequestHandler):
         """Same guard on both /api/feed implementations (this one and the
         Vercel function, #47): a POST carrying a feed URL - someone's secret
         - must say so explicitly, not be guessed at from an empty/absent
-        Content-Type."""
+        Content-Type. Also the one place a pasted PrairieLearn domain comes
+        through (/api/connect/prairielearn_custom), so the same hardening
+        covers both."""
         content_type = self.headers.get("Content-Type", "").split(";")[0].strip()
         if content_type != "application/json":
             raise ValueError("expected Content-Type: application/json")
@@ -186,6 +192,13 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             raise ValueError("expected a JSON object body")
         return body
+
+    def _connect_prairielearn_custom(self):
+        try:
+            domain = self._read_json_body().get("domain", "")
+        except ValueError as e:
+            return self._json({"ok": False, "error": str(e)}, status=400)
+        self._connect(lambda: prairielearn.fetch(domain))
 
     def _feed(self):
         """POST /api/feed: {url} -> that feed's items, parsed fresh, nothing

@@ -45,7 +45,8 @@ def test_prairielearn_capture_reuses_live_fixture_mapping():
     from tests.test_prairielearn import OPEN_ROW
 
     existing = prairielearn.to_item(BeautifulSoup(OPEN_ROW, "html.parser").find("tr"),
-                                   "CPSC 317", "Programming Assignments", "221053")
+                                   "CPSC 317", "Programming Assignments",
+                                   "prairielearn", "https://us.prairielearn.com", "221053")
     capture = {"source": "prairielearn", "origin": "https://us.prairielearn.com",
                "courses": [{"ci_id": "221053",
                             "title": "CPSC 317: Internet Computing, 2026 Winter Term 1",
