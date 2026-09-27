@@ -277,6 +277,14 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
   const [brightspaceCourseCount, setBrightspaceCourseCount] = useState(null);
   const [webworkUrl, setWebworkUrl] = useState("");
   const [webworkCourseCode, setWebworkCourseCode] = useState("");
+  // Same problem as brightspaceCourseCount above, for a different reason:
+  // hub/webwork.py's own module docstring says a due date only exists for
+  // a *currently open* set, so /api/upcoming (which requires one) can
+  // legitimately return zero of a real, successfully-connected account's
+  // items - verified live: a real account saved 7 real problem sets, every
+  // one closed or not-yet-open, so the item-count signal read 0 the whole
+  // time. Track the connect response's own count directly instead.
+  const [webworkItemCount, setWebworkItemCount] = useState(null);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
   const byId = Object.fromEntries(connections.map((c) => [c.id, c]));
@@ -536,10 +544,16 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
 
           <div className="flex flex-wrap items-center justify-between gap-3 py-3">
             <div className="flex items-center gap-3">
-              <span className={`size-2.5 rounded-full ${byId.webwork.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <span className={`size-2.5 rounded-full ${webworkItemCount > 0 ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
               <div>
                 <div className="font-bold">WeBWorK</div>
-                <div className="text-xs text-[var(--muted)]">{byId.webwork.connected ? "Connected" : "Not connected"} &middot; {byId.webwork.detail}</div>
+                <div className="text-xs text-[var(--muted)]">
+                  {webworkItemCount > 0
+                    ? `Connected · ${webworkItemCount} item${webworkItemCount === 1 ? "" : "s"}`
+                    : webworkItemCount === 0
+                      ? "Connected · nothing currently open"
+                      : "Not connected"}
+                </div>
               </div>
             </div>
             {isLocalMode() && !sampleMode && (
@@ -563,10 +577,10 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
                 />
                 <AppButton
                   disabled={busy !== null || !webworkUrl || !webworkCourseCode}
-                  onClick={() => run("webwork", () => connectWebWork(webworkUrl, webworkCourseCode))}
+                  onClick={() => run("webwork", async () => setWebworkItemCount((await connectWebWork(webworkUrl, webworkCourseCode)).items))}
                   className="toggle-pill"
                 >
-                  {busy === "webwork" ? "Signing in…" : byId.webwork.connected ? "Reconnect" : "Connect"}
+                  {busy === "webwork" ? "Signing in…" : webworkItemCount > 0 ? "Reconnect" : "Connect"}
                 </AppButton>
               </div>
             )}

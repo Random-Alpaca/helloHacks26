@@ -536,8 +536,16 @@ const KNOWN_PROVIDERS = [
   { id: "canvas", label: "Canvas" },
   { id: "prairielearn", label: "PrairieLearn" },
   { id: "prairielearn_ok", label: "PrairieLearn (Okanagan)" },
-  { id: "webwork", label: "WeBWorK" },
 ];
+// WeBWorK isn't here despite having a real `source` on its items, unlike
+// Canvas/PrairieLearn: an item-count signal only counts what /api/upcoming
+// returns, which requires a due date - but hub/webwork.py's own module
+// docstring is explicit that a due date only exists for a *currently open*
+// set. Verified live: a real account connected successfully (7 real
+// problem sets saved), but every one was closed or not-yet-open, so the
+// item count was 0 and this row would show "Not connected" regardless -
+// same problem Brightspace already has by design, tracked the same way
+// (page.js's own connect-response count, not this selector).
 
 function countOf(n, noun) {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
@@ -551,7 +559,10 @@ export function selectConnections(items, meetings) {
   // directly (hub/prairielearn.py's resolve_campus() accepts one) - a
   // hardcoded list can never cover every self-hosted instance, so these
   // show up dynamically instead of needing their own KNOWN_PROVIDERS entry.
-  const knownIds = new Set(KNOWN_PROVIDERS.map((p) => p.id));
+  // "webwork" is excluded here too even though it's not in KNOWN_PROVIDERS -
+  // it's a real source, just tracked in page.js instead (see the comment
+  // above KNOWN_PROVIDERS), not an unrecognized PrairieLearn instance.
+  const knownIds = new Set([...KNOWN_PROVIDERS.map((p) => p.id), "webwork"]);
   const customSources = [...new Set(items.map((item) => item.source))].filter((s) => s && !knownIds.has(s));
   for (const source of customSources) {
     rows.push({ id: source, label: `PrairieLearn (${source})`, connected: true, detail: countOf(countBySource(source), "item") });
