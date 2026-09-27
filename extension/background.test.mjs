@@ -132,3 +132,52 @@ test("a configured school origin controls custom-provider injection and sender v
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.notEqual(stored.syncStatus, "fake");
 });
+
+test("navigated provider opens every course page and captures all rows", async () => {
+  const handlers = {};
+  const stored = {};
+  const visited = [];
+  let onUpdated;
+  const origin = "https://us.prairielearn.com";
+  const chrome = {
+    storage: {local: {setAccessLevel: async () => {}, get: async () => stored,
+                      set: async value => Object.assign(stored, value)}},
+    runtime: {onInstalled: {addListener: () => {}},
+              onMessage: {addListener: fn => { handlers.message = fn; }}},
+    alarms: {create: () => {}, onAlarm: {addListener: fn => { handlers.alarm = fn; }}},
+    tabs: {query: async () => [{id: 7, status: "complete"}], create: async () => {},
+      onUpdated: {addListener: fn => { onUpdated = fn; }, removeListener: () => {}},
+      update: async (id, {url}) => {
+        visited.push(url);
+        setTimeout(() => onUpdated(id, {status: "complete"}, {id, url}), 0);
+      }},
+    scripting: {executeScript: async ({files}) => [{result:
+      files[0].endsWith("index.js") ? [
+        {ci_id: "1", title: "CPSC 101: Intro, 2026 Winter Term 1"},
+        {ci_id: "2", title: "CPSC 102: Intro, 2026 Winter Term 1"}
+      ] : {ci_id: visited.at(-1).match(/\/(\d+)\/assessments$/)[1], assessments: [
+        {title: "Quiz", group: "Quizzes", href: "", due_text: "", score_text: "",
+         credit_empty: false}
+      ]}
+    }]}
+  };
+  const context = {chrome, URL, Date, JSON, setTimeout, clearTimeout,
+    fetch: async () => ({ok: true, json: async () =>
+      ({source: "prairielearn", stored: false, courses: [], items: []})}),
+    HUB_PROVIDERS: [{id: "prairielearn", label: "PrairieLearn", origin,
+      indexFile: "providers/prairielearn-index.js", pageFile: "providers/prairielearn-assessments.js",
+      courseIdField: "ci_id", courseIdPattern: /^\d+$/,
+      pagePathTemplate: "/pl/course_instance/{id}/assessments", rowsKey: "assessments"}],
+    importScripts: () => {}};
+  vm.runInNewContext(fs.readFileSync(new URL("./background.js", import.meta.url), "utf8"), context);
+  handlers.alarm({name: "provider-sync"});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.deepEqual(visited, []);
+  const result = await new Promise(resolve =>
+    handlers.message({type: "SYNC_NOW", provider: "prairielearn"}, {}, resolve));
+  assert.equal(result.ok, true);
+  assert.deepEqual(visited, [origin + "/", origin + "/pl/course_instance/1/assessments",
+    origin + "/pl/course_instance/2/assessments"]);
+  assert.equal(stored.latestCaptures.prairielearn.courses.length, 2);
+  assert.equal(stored.latestCaptures.prairielearn.courses[1].assessments.length, 1);
+});

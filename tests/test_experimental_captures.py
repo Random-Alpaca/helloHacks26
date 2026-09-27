@@ -37,3 +37,26 @@ def test_piazza_capture_reuses_pinned_post_mapper():
     assert model["courses"][0]["code"] == "CPSC 121"
     assert model["items"][0]["title"] == "Quiz room"
     assert model["items"][0]["source"] == "piazza"
+
+
+def test_prairielearn_capture_reuses_live_fixture_mapping():
+    from bs4 import BeautifulSoup
+    from hub import prairielearn
+    from tests.test_prairielearn import OPEN_ROW
+
+    existing = prairielearn.to_item(BeautifulSoup(OPEN_ROW, "html.parser").find("tr"),
+                                   "CPSC 317", "Programming Assignments", "221053")
+    capture = {"source": "prairielearn", "origin": "https://us.prairielearn.com",
+               "courses": [{"ci_id": "221053",
+                            "title": "CPSC 317: Internet Computing, 2026 Winter Term 1",
+                            "assessments": [{
+                                "title": "A Dictionary Client", "group": "Programming Assignments",
+                                "href": "/pl/course_instance/221053/assessment_instance/14835025/",
+                                "due_text": "2026-09-27 23:59:59 (PDT)",
+                                "score_text": "100%", "credit_empty": False,
+                            }]}]}
+    _, items = prairielearn.parse_capture(capture)
+    assert items == [existing]
+    capture["courses"][0]["assessments"][0]["href"] = "https://evil.example/steal"
+    with pytest.raises(ValueError, match="unsafe"):
+        prairielearn.parse_capture(capture)
