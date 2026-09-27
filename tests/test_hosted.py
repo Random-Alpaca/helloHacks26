@@ -125,6 +125,15 @@ def test_hosted_upsert_is_idempotent():
     db.init_hosted(s)  # schema creation is idempotent too
 
 
+def test_hosted_resync_replaces_stale_done_value():
+    s = store(sqlite3.connect(":memory:"), KEY_A)
+    db.save(s, *hosted.parse_sync(body(item={"done": False})))
+    db.save(s, *hosted.parse_sync(body(item={"done": True})))
+    assert db.upcoming(s)[0][6] == 1
+    db.save(s, *hosted.parse_sync(body(item={"done": False})))
+    assert db.upcoming(s)[0][6] == 0
+
+
 def test_students_are_isolated_and_wipe_is_scoped():
     conn = sqlite3.connect(":memory:")
     a, b = store(conn, KEY_A), store(conn, KEY_B)

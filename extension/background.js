@@ -1,6 +1,8 @@
 importScripts("providers.js");
 const DEFAULT_HUB_BASE = "https://hello-hacks26.vercel.app";
 const PROVIDERS = globalThis.HUB_PROVIDERS;
+const pendingCaptures = new Map();
+let syncProgress = [];
 
 async function hubBase() {
   const {hubBase: base} = await chrome.storage.local.get("hubBase");
@@ -102,19 +104,21 @@ async function captureNavigated(provider, tabId, origin) {
   await saveCapture(provider, capture);
 }
 
-async function syncNow(providerId, interactive = true) {
+async function syncNow(providerId, interactive = true, awaitUpload = false) {
   const provider = PROVIDERS.find(p => p.id === providerId);
   if (!provider) throw new Error("This provider has no verified extension adapter");
   if (!interactive && provider.indexFile) return; // Navigation is manual so a timer never moves a student's tab.
   const {providerOrigins = {}} = await chrome.storage.local.get("providerOrigins");
   const origin = provider.customOrigin ? providerOrigins[provider.id] : provider.origin;
   if (!origin) {
+    if (awaitUpload) throw new Error(`Set the ${provider.label} site URL in the extension popup`);
     if (interactive) await setStatus(`Enter your ${provider.label} site URL in the extension popup.`);
     return;
   }
   const tabs = await chrome.tabs.query({url: `${origin}/*`});
   const tab = tabs.find(t => t.status === "complete" && t.id);
   if (!tab) {
+    if (awaitUpload) throw new Error(`Open ${provider.label}, sign in, then sync again`);
     if (interactive) {
       await chrome.tabs.create({url: `${origin}/`});
       await setStatus(`${provider.label} opened. Sign in there, then press Sync again.`);
@@ -138,7 +142,61 @@ async function syncNow(providerId, interactive = true) {
     await chrome.scripting.executeScript({target: {tabId: tab.id},
       func: key => { globalThis.__hubPageSessionValue = key; }, args: [pageSessionValue]});
   }
-  await chrome.scripting.executeScript({target: {tabId: tab.id}, files: [provider.captureFile]});
+  if (!awaitUpload) {
+    await chrome.scripting.executeScript({target: {tabId: tab.id}, files: [provider.captureFile]});
+    return;
+  }
+  // DOM captures reply asynchronously through CAPTURE_READY/FAILED after injection.
+  const uploaded = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      pendingCaptures.delete(provider.id);
+      reject(new Error(`${provider.label} capture timed out`));
+    }, 60000);
+    pendingCaptures.set(provider.id, {resolve, reject, timeout});
+  });
+  uploaded.catch(() => {});
+  try {
+    await chrome.scripting.executeScript({target: {tabId: tab.id}, files: [provider.captureFile]});
+  } catch (error) {
+    clearTimeout(pendingCaptures.get(provider.id)?.timeout);
+    pendingCaptures.delete(provider.id);
+    throw error;
+  }
+  await uploaded;
+}
+
+async function syncAll() {
+  const {latestCaptures = {}, providerOrigins = {}, syncKey} = await chrome.storage.local.get(
+    ["latestCaptures", "providerOrigins", "syncKey"]);
+  if (!syncKey) throw new Error("Open the extension popup to set a hub sync key");
+  const results = [];
+  syncProgress = PROVIDERS.filter(provider => latestCaptures[provider.id]
+    && (!provider.customOrigin || providerOrigins[provider.id]))
+    .map(provider => ({provider: provider.id, label: provider.label, state: "pending"}));
+  for (const provider of PROVIDERS) {
+    if (!latestCaptures[provider.id] || provider.customOrigin && !providerOrigins[provider.id]) continue;
+    const progress = syncProgress.find(row => row.provider === provider.id);
+    progress.state = "running";
+    try {
+      await syncNow(provider.id, true, true);
+      results.push({provider: provider.id, label: provider.label, ok: true});
+      progress.state = "done";
+    } catch (error) {
+      results.push({provider: provider.id, label: provider.label, ok: false, error: error.message});
+      progress.state = "done";
+      progress.error = error.message;
+    }
+  }
+  return results;
+}
+
+function finishCapture(providerId, error) {
+  const pending = pendingCaptures.get(providerId);
+  if (!pending) return;
+  clearTimeout(pending.timeout);
+  pendingCaptures.delete(providerId);
+  if (error) pending.reject(error);
+  else pending.resolve();
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -171,8 +229,33 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (senderOrigin !== allowedOrigin || message.capture?.origin && message.capture.origin !== allowedOrigin) return;
     if (message.type === "CAPTURE_FAILED") {
       await setStatus(message.error || `${provider.label} sync failed`);
+      finishCapture(provider.id, new Error(message.error || `${provider.label} sync failed`));
       return;
     }
     await saveCapture(provider, message.capture);
-  })().catch(error => setStatus(error.message));
+    finishCapture(provider.id);
+  })().catch(error => {
+    setStatus(error.message);
+    finishCapture(provider.id, error);
+  });
+});
+
+chrome.runtime.onMessageExternal.addListener((message, sender, respond) => {
+  if (message?.type !== "SYNC_ALL" && message?.type !== "SYNC_STATUS") return;
+  const origin = sender.url && new URL(sender.url).origin;
+  if (!["https://hello-hacks26.vercel.app", "https://hello-hacks26-one.vercel.app",
+        "http://localhost:3000"].includes(origin)) return;
+  if (message.type === "SYNC_STATUS") {
+    respond({results: syncProgress});
+    return;
+  }
+  (async () => {
+    const base = await hubBase();
+    if (origin !== "http://localhost:3000" && origin !== base) {
+      throw new Error(`Extension sync target is ${base}. Set it to ${origin} in the popup first.`);
+    }
+    return syncAll();
+  })().then(results => respond({ok: true, results}), error =>
+    respond({ok: false, error: error.message}));
+  return true;
 });

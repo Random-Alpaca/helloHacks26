@@ -14,7 +14,8 @@ test("uploads a Canvas capture to Vercel without browser session credentials", a
       set: async value => Object.assign(stored, value)
     }},
     runtime: {onInstalled: {addListener: fn => { handlers.installed = fn; }},
-              onMessage: {addListener: fn => { handlers.message = fn; }}},
+              onMessage: {addListener: fn => { handlers.message = fn; }},
+              onMessageExternal: {addListener: () => {}}},
     alarms: {create: () => {}, onAlarm: {addListener: fn => { handlers.alarm = fn; }}},
     tabs: {query: async () => [], create: async () => {}},
     scripting: {executeScript: async () => {}}
@@ -57,7 +58,8 @@ test("keeps a capture local when the hosted sync key is not configured", async (
     storage: {local: {setAccessLevel: async () => {}, get: async () => stored,
                       set: async value => Object.assign(stored, value)}},
     runtime: {onInstalled: {addListener: () => {}},
-              onMessage: {addListener: fn => { handlers.message = fn; }}},
+              onMessage: {addListener: fn => { handlers.message = fn; }},
+              onMessageExternal: {addListener: () => {}}},
     alarms: {create: () => {}, onAlarm: {addListener: () => {}}},
     tabs: {query: async () => [], create: async () => {}},
     scripting: {executeScript: async () => {}}
@@ -84,7 +86,8 @@ test("the transport runs another registered provider without provider-specific c
     storage: {local: {setAccessLevel: async () => {}, get: async () => ({}),
                       set: async () => {}}},
     runtime: {onInstalled: {addListener: () => {}},
-              onMessage: {addListener: fn => { handlers.message = fn; }}},
+              onMessage: {addListener: fn => { handlers.message = fn; }},
+              onMessageExternal: {addListener: () => {}}},
     alarms: {create: () => {}, onAlarm: {addListener: () => {}}},
     tabs: {query: async query => {
       assert.equal(query.url, "https://moodle.example/*");
@@ -111,7 +114,8 @@ test("a configured school origin controls custom-provider injection and sender v
     storage: {local: {setAccessLevel: async () => {}, get: async () => stored,
                       set: async value => Object.assign(stored, value)}},
     runtime: {onInstalled: {addListener: () => {}},
-              onMessage: {addListener: fn => { handlers.message = fn; }}},
+              onMessage: {addListener: fn => { handlers.message = fn; }},
+              onMessageExternal: {addListener: () => {}}},
     alarms: {create: () => {}, onAlarm: {addListener: () => {}}},
     tabs: {query: async query => {
       assert.equal(query.url, "https://bb.example.edu/*");
@@ -135,7 +139,7 @@ test("a configured school origin controls custom-provider injection and sender v
 
 test("navigated provider opens every course page and captures all rows", async () => {
   const handlers = {};
-  const stored = {};
+  const stored = {syncKey: "fake-key", latestCaptures: {prairielearn: {source: "prairielearn"}}};
   const visited = [];
   let onUpdated;
   const origin = "https://us.prairielearn.com";
@@ -143,7 +147,8 @@ test("navigated provider opens every course page and captures all rows", async (
     storage: {local: {setAccessLevel: async () => {}, get: async () => stored,
                       set: async value => Object.assign(stored, value)}},
     runtime: {onInstalled: {addListener: () => {}},
-              onMessage: {addListener: fn => { handlers.message = fn; }}},
+              onMessage: {addListener: fn => { handlers.message = fn; }},
+              onMessageExternal: {addListener: fn => { handlers.external = fn; }}},
     alarms: {create: () => {}, onAlarm: {addListener: fn => { handlers.alarm = fn; }}},
     tabs: {query: async () => [{id: 7, status: "complete"}], create: async () => {},
       onUpdated: {addListener: fn => { onUpdated = fn; }, removeListener: () => {}},
@@ -180,4 +185,71 @@ test("navigated provider opens every course page and captures all rows", async (
     origin + "/pl/course_instance/2/assessments"]);
   assert.equal(stored.latestCaptures.prairielearn.courses.length, 2);
   assert.equal(stored.latestCaptures.prairielearn.courses[1].assessments.length, 1);
+  const everywhere = await new Promise(resolve => handlers.external({type: "SYNC_ALL"},
+    {url: "https://hello-hacks26.vercel.app/"}, resolve));
+  assert.equal(everywhere.results[0].ok, true);
+  assert.equal(visited.length, 6); // SYNC_ALL takes the same interactive navigation path.
+});
+
+test("SYNC_ALL skips never-connected providers and waits for DOM capture upload", async () => {
+  const handlers = {};
+  const stored = {syncKey: "fake-key", latestCaptures: {canvas: {source: "canvas"}}};
+  const calls = [];
+  const chrome = {
+    storage: {local: {setAccessLevel: async () => {}, get: async () => stored,
+                      set: async value => Object.assign(stored, value)}},
+    runtime: {onInstalled: {addListener: () => {}},
+              onMessage: {addListener: fn => { handlers.message = fn; }},
+              onMessageExternal: {addListener: fn => { handlers.external = fn; }}},
+    alarms: {create: () => {}, onAlarm: {addListener: () => {}}},
+    tabs: {query: async () => [{id: 3, status: "complete"}], create: async () => {}},
+    scripting: {executeScript: async ({files}) => {
+      calls.push(files[0]);
+      setTimeout(() => handlers.message({type: "CAPTURE_READY", capture: {source: "canvas"}},
+        {tab: {url: "https://canvas.ubc.ca/courses"}}, () => {}), 0);
+    }}
+  };
+  const context = {chrome, URL, Date, JSON, setTimeout, clearTimeout,
+    fetch: async (url) => {
+      calls.push(url);
+      return {ok: true, json: async () =>
+        ({source: "canvas", stored: false, courses: [], items: []})};
+    },
+    HUB_PROVIDERS: [
+      {id: "canvas", label: "Canvas", origin: "https://canvas.ubc.ca", captureFile: "providers/canvas.js"},
+      {id: "piazza", label: "Piazza", origin: "https://piazza.com", captureFile: "providers/piazza.js"}
+    ], importScripts: () => {}};
+  vm.runInNewContext(fs.readFileSync(new URL("./background.js", import.meta.url), "utf8"), context);
+  const result = await new Promise(resolve => handlers.external({type: "SYNC_ALL"},
+    {url: "https://hello-hacks26.vercel.app/"}, resolve));
+  assert.equal(result.ok, true);
+  assert.deepEqual(Array.from(result.results, r => [r.provider, r.ok]), [["canvas", true]]);
+  assert.deepEqual(calls, ["providers/canvas.js", "https://hello-hacks26.vercel.app/api/normalize",
+    "https://hello-hacks26.vercel.app/api/sync"]);
+  const status = await new Promise(resolve => handlers.external({type: "SYNC_STATUS"},
+    {url: "https://hello-hacks26.vercel.app/"}, resolve));
+  assert.deepEqual(Array.from(status.results, r => [r.provider, r.state]), [["canvas", "done"]]);
+});
+
+test("SYNC_ALL reports a provider error when its signed-in tab is closed", async () => {
+  const handlers = {};
+  const stored = {syncKey: "fake-key", latestCaptures: {canvas: {source: "canvas"}}};
+  const chrome = {
+    storage: {local: {setAccessLevel: async () => {}, get: async () => stored,
+                      set: async () => {}}},
+    runtime: {onInstalled: {addListener: () => {}},
+              onMessage: {addListener: () => {}},
+              onMessageExternal: {addListener: fn => { handlers.external = fn; }}},
+    alarms: {create: () => {}, onAlarm: {addListener: () => {}}},
+    tabs: {query: async () => [], create: async () => { throw Error("must not open tab"); }},
+    scripting: {executeScript: async () => { throw Error("must not capture"); }}
+  };
+  const context = {chrome, URL, Date, JSON, setTimeout, clearTimeout,
+    HUB_PROVIDERS: [{id: "canvas", label: "Canvas", origin: "https://canvas.ubc.ca",
+      captureFile: "providers/canvas.js"}], importScripts: () => {}};
+  vm.runInNewContext(fs.readFileSync(new URL("./background.js", import.meta.url), "utf8"), context);
+  const result = await new Promise(resolve => handlers.external({type: "SYNC_ALL"},
+    {url: "https://hello-hacks26.vercel.app/"}, resolve));
+  assert.equal(result.results[0].ok, false);
+  assert.match(result.results[0].error, /Open Canvas/);
 });

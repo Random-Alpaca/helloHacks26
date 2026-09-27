@@ -265,12 +265,14 @@ function CalendarSection({ items, meetings, now, onToggleItemDone }) {
   );
 }
 
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind, onConnectHosted, hostedConnected, allItems, allCoursesForPush }) {
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onScheduleImported, allCourses, hiddenCourses, onToggleCourseHidden, canvasFeedUrl, feedItemCount, feedError, onConnectFeed, onDisconnectFeed, preferredKinds, onTogglePreferredKind, onConnectHosted, onSynced, hostedConnected, allItems, allCoursesForPush }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
   const [customDomain, setCustomDomain] = useState("");
   const [feedUrlInput, setFeedUrlInput] = useState("");
   const [hostedKeyInput, setHostedKeyInput] = useState("");
+  const [extensionId, setExtensionId] = useState("");
+  const [syncResults, setSyncResults] = useState(null);
   const [pushBase, setPushBase] = useState("https://hello-hacks26-one.vercel.app");
   const [pushKeyInput, setPushKeyInput] = useState("");
   const [pushStatus, setPushStatus] = useState(null);
@@ -279,6 +281,40 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
   const byId = Object.fromEntries(connections.map((c) => [c.id, c]));
   const FIXED_IDS = new Set(["canvas", "prairielearn", "prairielearn_ok", "workday"]);
   const customConnections = connections.filter((c) => !FIXED_IDS.has(c.id));
+
+  useEffect(() => {
+    setExtensionId(localStorage.getItem("hub-extension-id") || "");
+  }, []);
+
+  async function syncEverywhere() {
+    const id = extensionId.trim();
+    if (!/^[a-p]{32}$/.test(id)) throw new Error("Paste the extension ID from chrome://extensions first.");
+    localStorage.setItem("hub-extension-id", id);
+    if (!globalThis.chrome?.runtime?.sendMessage) {
+      throw new Error("Extension unreachable. Load extension/ unpacked in Chrome and paste its ID from chrome://extensions.");
+    }
+    setSyncResults(null);
+    // Unpacked installs have different IDs; save this browser's ID instead of guessing one.
+    const progressTimer = setInterval(() => {
+      chrome.runtime.sendMessage(id, {type: "SYNC_STATUS"}, (response) => {
+        if (!chrome.runtime.lastError && response?.results?.length) setSyncResults(response.results);
+      });
+    }, 500);
+    let reply;
+    try {
+      reply = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(id, {type: "SYNC_ALL"}, (response) => {
+          if (chrome.runtime.lastError) reject(new Error("Extension unreachable. Load extension/ unpacked in Chrome and check its ID."));
+          else resolve(response);
+        });
+      });
+    } finally {
+      clearInterval(progressTimer);
+    }
+    if (!reply?.ok) throw new Error(reply?.error || "Extension did not respond.");
+    setSyncResults(reply.results);
+    if (reply.results.some((result) => result.ok)) await onSynced();
+  }
 
   async function handleFile(e) {
     const file = e.target.files[0];
@@ -390,7 +426,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
         <div className="mb-5 text-sm text-[var(--muted)]">
           {isLocalMode()
             ? "What's actually feeding your dashboard right now."
-            : "This is the hosted demo, so Canvas and PrairieLearn can't connect here - run Hub locally to link a real account (see the README)."}
+            : "Connect your hosted data with a sync key, then refresh signed-in providers through the browser extension."}
         </div>
 
         <label className="toggle-pill mb-5 flex w-full items-center justify-between">
@@ -431,6 +467,25 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
                 </div>
               </>
             )}
+            <div className="mt-4 border-t border-[var(--line)] pt-4">
+              <div className="mb-2 text-sm font-bold">Sync everywhere now</div>
+              <div className="mb-3 text-xs text-[var(--muted)]">Load extension/ unpacked in Chrome, then paste its ID from chrome://extensions. Keep each connected provider signed in and open.</div>
+              <div className="flex flex-wrap items-center gap-2">
+                <input type="text" value={extensionId} onChange={(e) => setExtensionId(e.target.value)}
+                  placeholder="Extension ID" aria-label="Extension ID"
+                  className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-[var(--surface)] px-2 py-1 text-xs" />
+                <AppButton disabled={busy !== null} onClick={() => run("sync-all", syncEverywhere)} className="toggle-pill">
+                  Sync everywhere now
+                </AppButton>
+              </div>
+              {busy === "sync-all" && <div className="mt-2 text-xs text-[var(--muted)]">Extension is syncing connected providers in sequence…</div>}
+              {syncResults && <div className="mt-2 text-xs" aria-live="polite">
+                {syncResults.length === 0 ? "No providers have synced through this extension yet. Connect one in its popup first." :
+                  syncResults.map((result) => <div key={result.provider}>
+                    {result.label}: {result.state === "pending" ? "Waiting" : result.state === "running" ? "Syncing" : result.ok || result.state === "done" && !result.error ? "Uploaded" : result.error}
+                  </div>)}
+              </div>}
+            </div>
           </div>
         )}
 
@@ -1025,6 +1080,7 @@ export default function App() {
               preferredKinds={preferredKinds}
               onTogglePreferredKind={togglePreferredKind}
               onConnectHosted={connectHostedStore}
+              onSynced={async () => applyHostedStore(await fetchHostedStore())}
               hostedConnected={storeItems.length > 0 || storeCourses.length > 0}
               allItems={allItems}
               allCoursesForPush={allCourses}

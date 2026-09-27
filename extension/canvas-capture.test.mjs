@@ -44,3 +44,14 @@ test("rejects a pagination link that would carry browser credentials off origin"
   await assert.rejects(captureCanvas({origin: "https://canvas.ubc.ca", fetch: request}),
                        /allowed origin/);
 });
+
+test("completed planner submission survives the Canvas capture", async () => {
+  const request = async url => ({ok: true, status: 200, headers: {get: () => null},
+    text: async () => JSON.stringify(new URL(url).pathname === "/api/v1/planner/items" ? [
+      {course_id: 7, plannable_type: "quiz", plannable_date: "2026-09-30T06:59:00Z",
+       plannable: {title: "Quiz 2"}, html_url: "/courses/7/quizzes/3",
+       submissions: {submitted: true}, planner_override: {marked_complete: false}}
+    ] : [])});
+  const capture = await captureCanvas({origin: "https://canvas.ubc.ca", fetch: request});
+  assert.deepEqual(capture.planner[0].submissions, {submitted: true, excused: false});
+});
