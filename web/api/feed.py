@@ -8,10 +8,14 @@ the host allowlist, size/time limits or item parsing here (rule 1: one
 parser, not two) - this file is only the HTTP glue Vercel's Python runtime
 expects.
 
-Vercel's Root Directory is `web/`, so hub/ (one level up, at the actual
-repo root) is outside it by default - needs the project's "include files
-outside the Root Directory" build setting (or the equivalent vercel.json
-`functions.includeFiles`) turned on, or this import fails at deploy time.
+Vercel's Root Directory is `web/`, so hub/ (one level up, at the actual repo
+root) is outside it by default and can't just be imported - `includeFiles:
+"../hub/**"` in vercel.json looked like the fix, but Vercel rejects any
+`includeFiles` path that escapes the Root Directory ("invalid file
+descriptor path" at deploy time, not build time, so it looks fine right up
+until it ships). Instead, the CI deploy step (.github/workflows/ci.yml)
+copies hub/ to web/api/hub/ - a real sibling directory, inside the Root
+Directory, no special Vercel setting needed - before `vercel build` runs.
 """
 import json
 import sys
@@ -19,7 +23,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from hub import ics  # noqa: E402
 
