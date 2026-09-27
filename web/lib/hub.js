@@ -150,6 +150,24 @@ export async function fetchAnnouncements(useSample) {
   return rows.map(normaliseApiItem);
 }
 
+// Real work with no due date to rank by, but not an announcement -
+// hub/webwork.py is the clearest real case: its problem-set page only ever
+// shows a due date for a *currently open* set, so a real, successfully-
+// connected account's items can legitimately ALL come back due=None.
+// Merged into the same item list everything else uses (see mergeItems in
+// App()) rather than kept as its own separate feed, so a course's due-less
+// work shows up right alongside its dated work wherever items already
+// render (Courses tab, Assignments, Overview) - unlike announcements,
+// which are informational, not something to actually merge in as a task.
+export async function fetchUndatedTasks(useSample) {
+  const base = apiBase();
+  if (!base || useSample) return [];
+  const res = await fetch(`${base}/api/undated-tasks`);
+  if (!res.ok) throw new Error(`GET /api/undated-tasks failed: ${res.status}`);
+  const rows = await res.json();
+  return rows.map(normaliseApiItem);
+}
+
 export async function fetchCourses(useSample) {
   const base = apiBase();
   if (!base || useSample) return SAMPLE_COURSES;

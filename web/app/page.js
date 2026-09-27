@@ -10,6 +10,7 @@ import {
   connectWebWork,
   displayLabel,
   fetchAnnouncements,
+  fetchUndatedTasks,
   fetchCanvasFeed,
   fetchCourses,
   fetchUpcoming,
@@ -686,6 +687,7 @@ export default function App() {
   const [sampleMode, setSampleMode] = useState(!isLocalMode());
   const [items, setItems] = useState([]);
   const [announcements, setAnnouncements] = useState([]);
+  const [undatedTasks, setUndatedTasks] = useState([]);
   const [fetchedCourses, setFetchedCourses] = useState([]);
   const [meetings, setMeetings] = useState([]);
   const [loadError, setLoadError] = useState(null);
@@ -855,6 +857,15 @@ export default function App() {
     } catch {
       setAnnouncements([]);
     }
+    // Same best-effort treatment as announcements above - and for the same
+    // reason: a real, successfully-connected source (WeBWorK) can have
+    // every one of its items come back due=None, which used to mean
+    // invisible everywhere (see hub/api.py's _undated_tasks()).
+    try {
+      setUndatedTasks(await fetchUndatedTasks(useSample));
+    } catch {
+      setUndatedTasks([]);
+    }
   }
 
   function importWorkdaySchedule(imported) {
@@ -869,7 +880,7 @@ export default function App() {
   const now = new Date();
   const allCourses = fetchedCourses;
   const courses = selectVisibleCourses(allCourses, hiddenCourses);
-  const allItems = mergeItems(items, feedItems);
+  const allItems = mergeItems(mergeItems(items, feedItems), undatedTasks);
   const activeItems = hideCourseItems(selectActiveItems(allItems, manuallyDoneKeys), hiddenCourses);
   const doneCount = hideCourseItems(allItems, hiddenCourses).filter((item) => isDone(item, manuallyDoneKeys)).length;
   const overdueCount = activeItems.filter((item) => isOverdue(item, now)).length;

@@ -66,13 +66,22 @@ def _announcements(conn):
     unopened PrairieLearn assessment has no due date either, and used to leak
     into this feed looking like an announcement. Filter to kind="announcement"
     here rather than in db.undated() itself, which other undated items may
-    still want to read from later.
-    # ponytail: an undated task/deadline has nowhere to surface at all right
-    # now (it's excluded here, and _upcoming() requires a due date) - fine
-    # until something asks for an "undated tasks" list of its own.
-    """
+    still want to read from later - see _undated_tasks() below."""
     now = datetime.now(timezone.utc)
     return [_row_to_dict(r, now) for r in db.undated(conn) if r[2] == "announcement"]
+
+
+def _undated_tasks(conn):
+    """Everything else db.undated() has - real work with no due date to rank
+    by, not an announcement. hub/webwork.py is the clearest real case: its
+    problem-set page only ever shows a due date for a *currently open* set
+    (its own module docstring), so a real, successfully-connected account's
+    items can legitimately ALL come back due=None - before this existed they
+    had nowhere to surface at all (confirmed live: 7 real WeBWorK items,
+    connected correctly, invisible everywhere - _upcoming() requires a due
+    date, and _announcements() above only shows kind="announcement")."""
+    now = datetime.now(timezone.utc)
+    return [_row_to_dict(r, now) for r in db.undated(conn) if r[2] != "announcement"]
 
 
 def _schedule(conn):
@@ -126,6 +135,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(_upcoming(db.connect()))
         elif path == "/api/announcements":
             self._json(_announcements(db.connect()))
+        elif path == "/api/undated-tasks":
+            self._json(_undated_tasks(db.connect()))
         elif path == "/api/courses":
             conn = db.connect()
             self._json([{"code": c, "term": t, "title": ti, "grade": g} for c, t, ti, g in db.courses(conn)])

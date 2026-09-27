@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 
 from hub import brightspace, db, webwork
-from hub.api import ALLOWED_ORIGIN, Handler, _announcements, _upcoming
+from hub.api import ALLOWED_ORIGIN, Handler, _announcements, _undated_tasks, _upcoming
 from hub.models import Course, Item
 
 NOW = datetime.now(timezone.utc)
@@ -55,6 +55,20 @@ def test_announcements_excludes_undated_items_that_are_not_announcements():
                                due=None, url="https://x/b", source="canvas")
     db.save(conn, [COURSE], [announcement, undated_assignment])
     assert [r["title"] for r in _announcements(conn)] == ["Welcome!"]
+
+
+def test_undated_tasks_is_the_complement_of_announcements():
+    # Verified live: a real WeBWorK account connected successfully, but
+    # every one of its 7 real problem sets came back due=None (its own
+    # module docstring: a due date only exists for a currently-open set) -
+    # before this endpoint existed, they were invisible everywhere.
+    conn = db.connect(":memory:")
+    announcement = Item(course="CPSC 121", category="task", kind="announcement", title="Welcome!",
+                         due=None, url="https://x/a", source="canvas")
+    undated_problemset = Item(course="CPSC 121", category="task", kind="problemset", title="BMEG230-Statics-A2",
+                               due=None, url="https://x/b", source="webwork")
+    db.save(conn, [COURSE], [announcement, undated_problemset])
+    assert [r["title"] for r in _undated_tasks(conn)] == ["BMEG230-Statics-A2"]
 
 
 def _running_server(tmp_path, monkeypatch):
