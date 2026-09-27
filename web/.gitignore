@@ -3,6 +3,6 @@ node_modules/
 out/
 # Copied by the CI deploy step (.github/workflows/ci.yml) just before
 # `vercel build`, so web/api/feed.py's `from hub import ics` has a real
-# sibling directory to import instead of vercel.json's rejected
+# directory to import instead of vercel.json's rejected
 # includeFiles: "../hub/**". Never commit this copy.
-api/hub/
+hub/

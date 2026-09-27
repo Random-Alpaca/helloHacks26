@@ -14,7 +14,7 @@ root) is outside it by default and can't just be imported - `includeFiles:
 `includeFiles` path that escapes the Root Directory ("invalid file
 descriptor path" at deploy time, not build time, so it looks fine right up
 until it ships). Instead, the CI deploy step (.github/workflows/ci.yml)
-copies hub/ to web/api/hub/ - a real sibling directory, inside the Root
+copies hub/ to web/hub/ - inside the Root
 Directory, no special Vercel setting needed - before `vercel build` runs.
 """
 import json
@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from hub import ics  # noqa: E402
 
