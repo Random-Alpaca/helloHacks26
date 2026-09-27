@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   connectCanvas,
   connectPrairieLearn,
+  connectPrairieLearnCustom,
+  connectPrairieLearnOk,
   displayLabel,
   fetchAnnouncements,
   fetchCourses,
@@ -78,9 +80,12 @@ const WEEKDAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
 function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported }) {
   const [term, setTerm] = useState("2026W1");
   const [workdayStatus, setWorkdayStatus] = useState(null);
+  const [customDomain, setCustomDomain] = useState("");
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
   const byId = Object.fromEntries(connections.map((c) => [c.id, c]));
+  const FIXED_IDS = new Set(["canvas", "prairielearn", "prairielearn_ok", "workday"]);
+  const customConnections = connections.filter((c) => !FIXED_IDS.has(c.id));
 
   async function handleFile(e) {
     const file = e.target.files[0];
@@ -194,6 +199,63 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
               </AppButton>
             )}
           </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className={`size-2.5 rounded-full ${byId.prairielearn_ok.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div>
+                <div className="font-bold">PrairieLearn (Okanagan)</div>
+                <div className="text-xs text-[var(--muted)]">{byId.prairielearn_ok.connected ? "Connected" : "Not connected"} &middot; {byId.prairielearn_ok.detail}</div>
+              </div>
+            </div>
+            {isLocalMode() && !sampleMode && (
+              <AppButton disabled={busy !== null} onClick={() => run("prairielearn_ok", connectPrairieLearnOk)} className="toggle-pill">
+                {busy === "prairielearn_ok" ? "Signing in…" : byId.prairielearn_ok.connected ? "Reconnect" : "Connect"}
+              </AppButton>
+            )}
+          </div>
+
+          {customConnections.map((c) => (
+            <div key={c.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+              <div className="flex items-center gap-3">
+                <span className="size-2.5 rounded-full bg-[var(--success)]" />
+                <div>
+                  <div className="font-bold">{c.label}</div>
+                  <div className="text-xs text-[var(--muted)]">Connected &middot; {c.detail}</div>
+                </div>
+              </div>
+              {isLocalMode() && !sampleMode && (
+                <AppButton disabled={busy !== null} onClick={() => run(c.id, () => connectPrairieLearnCustom(`https://${c.id}`))} className="toggle-pill">
+                  {busy === c.id ? "Signing in…" : "Reconnect"}
+                </AppButton>
+              )}
+            </div>
+          ))}
+
+          {isLocalMode() && !sampleMode && (
+            <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+              <div className="flex items-center gap-3">
+                <span className="size-2.5 rounded-full bg-[var(--muted-light)]" />
+                <div>
+                  <div className="font-bold">Different PrairieLearn?</div>
+                  <div className="text-xs text-[var(--muted)]">Any school can self-host their own - paste its address (e.g. https://prairielearn.example.edu)</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={customDomain}
+                  onChange={(e) => setCustomDomain(e.target.value)}
+                  placeholder="https://prairielearn.example.edu"
+                  aria-label="Custom PrairieLearn URL"
+                  className="w-56 rounded-md border border-[var(--line)] bg-[var(--surface-soft)] px-2 py-1 text-xs"
+                />
+                <AppButton disabled={busy !== null || !customDomain} onClick={() => run("prairielearn_custom", () => connectPrairieLearnCustom(customDomain))} className="toggle-pill">
+                  {busy === "prairielearn_custom" ? "Signing in…" : "Connect"}
+                </AppButton>
+              </div>
+            </div>
+          )}
 
           <div className="flex flex-wrap items-center justify-between gap-3 py-3">
             <div className="flex items-center gap-3">
