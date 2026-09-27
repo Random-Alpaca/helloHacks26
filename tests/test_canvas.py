@@ -38,3 +38,13 @@ def test_done_from_submissions():
     assert done_from_submissions({"submissions": {"submitted": False, "excused": False}}) is False
     assert done_from_submissions({"submissions": False}) is None
     assert done_from_submissions({}) is None
+
+
+def test_done_from_submissions_also_honors_the_manual_complete_checkbox():
+    # A student can tick an item off Canvas's own to-do list without
+    # submitting anything (e.g. a reading with no submission at all) - that
+    # used to keep showing up here as not-done forever.
+    assert done_from_submissions({"submissions": False, "planner_override": {"marked_complete": True}}) is True
+    assert done_from_submissions({"planner_override": {"marked_complete": True}}) is True
+    assert done_from_submissions({"submissions": {"submitted": False}, "planner_override": {"marked_complete": False}}) is False
+    assert done_from_submissions({"planner_override": None}) is None

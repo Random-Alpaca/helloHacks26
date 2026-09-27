@@ -1,6 +1,6 @@
 from bs4 import BeautifulSoup
 
-from hub.prairielearn import due_from_popover, to_course, to_item
+from hub.prairielearn import done_from_score, due_from_popover, to_course, to_item
 
 # Real markup captured from a live UBC PrairieLearn course (CPSC 317, 2026W1).
 OPEN_ROW = """
@@ -62,6 +62,25 @@ def test_group_heading_maps_quiz_and_exam():
 
 def test_last_tier_with_no_end_date_is_none():
     assert due_from_popover(None) is None
+
+
+def test_a_100_percent_score_is_done():
+    assert to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments").done is True
+
+
+def test_not_started_is_not_done():
+    assert to_item(row(NOT_OPEN_ROW), "CPSC 317", "Programming Assignments").done is False
+
+
+def test_a_partial_score_is_not_done():
+    # Partial credit is still improvable until the assessment closes - only
+    # a 100% score means nothing is left to do here.
+    partial_row = row(OPEN_ROW.replace('">100%</td>', '">85%</td>'))
+    assert done_from_score(partial_row.select("td")) is False
+
+
+def test_done_from_score_handles_a_short_row_without_crashing():
+    assert done_from_score(row(NOT_OPEN_ROW).select("td")[:2]) is None
 
 
 def test_course_title_parsing():

@@ -40,10 +40,21 @@ def done_from_submissions(p):
     # Verified against a real planner/items response: "submissions" is a dict
     # (submitted/excused/graded/...) for anything gradeable, or a bare `false`
     # for announcements/events - nothing to report there, so None not False.
+    #
+    # `planner_override.marked_complete` [unverified against a live response -
+    # confirm before relying on it in a demo] is Canvas's own to-do-list
+    # checkbox: a student can tick an item off without submitting anything at
+    # all (a reading, a task with no submission), and that's the signal
+    # Canvas's own Planner/Dashboard uses to cross an item out. Checked
+    # alongside submissions so a manually-completed item doesn't keep
+    # showing as due just because nothing was ever "submitted".
     submissions = p.get("submissions")
-    if not isinstance(submissions, dict):
+    override = p.get("planner_override")
+    marked_complete = bool(override.get("marked_complete")) if isinstance(override, dict) else False
+    if not isinstance(submissions, dict) and not marked_complete:
         return None
-    return bool(submissions.get("submitted") or submissions.get("excused"))
+    submitted_or_excused = isinstance(submissions, dict) and bool(submissions.get("submitted") or submissions.get("excused"))
+    return submitted_or_excused or marked_complete
 
 
 def to_item(p, course_codes):

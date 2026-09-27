@@ -83,6 +83,22 @@ def due_from_popover(popover_html):
     return datetime.fromisoformat(dt_str).replace(tzinfo=timezone(timedelta(hours=TZ_OFFSET.get(tz, 0))))
 
 
+_SCORE_RE = re.compile(r"([\d.]+)\s*%")
+
+
+def done_from_score(cells):
+    """PrairieLearn has no submitted/graded flag of its own on this page -
+    the 4th column shows a percentage ("100%") once attempted, or a status
+    like "Not started"/"Not yet released" otherwise. A 100% score is the
+    heuristic for "nothing left to do here" (a lower score means partial
+    credit is still improvable up until the assessment closes, so only 100%
+    counts as done, not "attempted at all")."""
+    if len(cells) < 4:
+        return None
+    m = _SCORE_RE.search(cells[3].get_text(strip=True))
+    return m is not None and float(m.group(1)) >= 100
+
+
 def to_item(row, course_code, group):
     cells = row.select("td")
     link = cells[1].find("a")
@@ -96,6 +112,7 @@ def to_item(row, course_code, group):
         due=due_from_popover(popover["data-bs-content"]) if popover else None,
         url=f"{BASE}{link['href']}" if link else "",
         source="prairielearn",
+        done=done_from_score(cells),
     )
 
 
