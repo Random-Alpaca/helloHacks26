@@ -44,6 +44,18 @@ CLOSED_ROW = """
   <td class="text-center align-middle">80%</td>
 </tr>
 """
+# Real false positive found in review (#15/#71): allowSubmissions=true,
+# credit=0 after the last deadline also empties the credit column, but the
+# assessment was never attempted at all - not finished, just no longer
+# worth points.
+CLOSED_BUT_NEVER_ATTEMPTED_ROW = """
+<tr>
+  <td class="align-middle" style="width: 1%"><span data-testid="assessment-set-badge">PRAC</span></td>
+  <td class="align-middle"><a href="/pl/course_instance/221053/assessment_instance/2">Modern Past Due Practice</a></td>
+  <td class="text-center align-middle"></td>
+  <td class="text-center align-middle">0%</td>
+</tr>
+"""
 
 
 def row(html):
@@ -109,6 +121,16 @@ def test_a_closed_assessment_with_no_available_credit_is_done_even_under_100_per
 
 def test_done_from_credit_is_true_only_when_the_column_is_truly_empty():
     assert done_from_credit(row(CLOSED_ROW).select("td")) is True
+
+
+def test_a_never_attempted_zero_credit_practice_assessment_is_not_done():
+    # The false positive PM review found: allowSubmissions=true, credit=0
+    # after the last deadline also empties the credit column, but nothing
+    # was ever attempted - an empty credit cell alone isn't "done" unless
+    # the score is also nonzero.
+    item = to_item(row(CLOSED_BUT_NEVER_ATTEMPTED_ROW), "CPSC 317", "Quizzes", "221053")
+    assert item.done is False
+    assert done_from_credit(row(CLOSED_BUT_NEVER_ATTEMPTED_ROW).select("td")) is False
     assert done_from_credit(row(NOT_OPEN_ROW).select("td")) is False  # "Available <time>" notice
     assert done_from_credit(row(OPEN_ROW).select("td")) is False  # still has its popover button
 

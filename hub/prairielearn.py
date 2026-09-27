@@ -116,11 +116,22 @@ def done_from_credit(cells):
     show this with a score well under 100% (e.g. 66%, 80%, 85%), which
     done_from_score alone would miss. A not-yet-open assessment always shows
     an "Available <time>" message instead, so this never collides with that
-    case."""
-    if len(cells) < 3:
+    case.
+
+    An empty credit cell alone isn't enough, though (PM review on #15/#71
+    found this live): PrairieLearn also shows an empty cell for an
+    assessment that still accepts 0%-credit "practice" submissions after its
+    last deadline (`afterLastDeadline.allowSubmissions=true, credit=0`) -
+    that's not finished, just not worth more points anymore. Require a
+    nonzero score too, so a never-attempted assessment in that state stays
+    visible instead of silently disappearing."""
+    if len(cells) < 4:
         return False
     credit_cell = cells[2]
-    return credit_cell.find("button") is None and credit_cell.get_text(strip=True) == ""
+    if credit_cell.find("button") is not None or credit_cell.get_text(strip=True) != "":
+        return False
+    m = _SCORE_RE.search(cells[3].get_text(strip=True))
+    return m is not None and float(m.group(1)) > 0
 
 
 def to_item(row, course_code, group, ci_id):

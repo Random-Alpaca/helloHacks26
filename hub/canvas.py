@@ -42,13 +42,14 @@ def done_from_submissions(p):
     # (submitted/excused/graded/...) for anything gradeable, or a bare `false`
     # for announcements/events - nothing to report there, so None not False.
     #
-    # `planner_override.marked_complete` [unverified against a live response -
-    # confirm before relying on it in a demo] is Canvas's own to-do-list
-    # checkbox: a student can tick an item off without submitting anything at
-    # all (a reading, a task with no submission), and that's the signal
-    # Canvas's own Planner/Dashboard uses to cross an item out. Checked
-    # alongside submissions so a manually-completed item doesn't keep
-    # showing as due just because nothing was ever "submitted".
+    # `planner_override.marked_complete` is Canvas's own to-do-list checkbox:
+    # a student can tick an item off without submitting anything at all (a
+    # reading, a task with no submission), and that's the signal Canvas's
+    # own Planner/Dashboard uses to cross an item out. Checked alongside
+    # submissions so a manually-completed item doesn't keep showing as due
+    # just because nothing was ever "submitted". Live-verified end to end on
+    # the self-hosted Canvas (PM review, #15/#71): marking/unmarking/deleting
+    # the override round-trips correctly through this function.
     submissions = p.get("submissions")
     override = p.get("planner_override")
     marked_complete = bool(override.get("marked_complete")) if isinstance(override, dict) else False
