@@ -244,3 +244,18 @@ def test_session_rejects_bad_key_and_origin(pg):
     assert call("session", "POST", {"key": "nope"})[0] == 400
     status, headers, _ = call("session", "POST", {"key": KEY_A}, {"Origin": "https://evil.example"})
     assert status == 403 and "Set-Cookie" not in headers
+
+
+def test_no_request_logging_even_under_vercels_wrapper(capsys):
+    from http.server import BaseHTTPRequestHandler
+
+    class Loud(BaseHTTPRequestHandler):  # vercel_runtime's BaseHandler re-implements log_message to print
+        def log_message(self, fmt, *args):
+            print("LOGGED", fmt % args)
+
+    wrapped = type("Handler", (Loud, route("sync")), {})
+    req = wrapped.__new__(wrapped)
+    req.requestline, req.client_address = "POST /api/sync HTTP/1.1", ("0.0.0.0", 0)
+    req.log_request(200)
+    req.log_error("boom")
+    assert "LOGGED" not in capsys.readouterr().out

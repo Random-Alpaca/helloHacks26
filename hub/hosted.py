@@ -139,9 +139,19 @@ def parse_sync(body):
 class Glue:
     """Mixed into each route's `handler(Glue, BaseHTTPRequestHandler)` -
     feed.py's hardening, shared: JSON only, no-store, capped bodies, generic
-    errors, no request logging (a key could ride along in a header)."""
+    errors, no request logging (a key could ride along in a header).
+
+    log_request/log_error too, not just log_message: Vercel's runtime wraps
+    `handler` in a subclass whose own log_message prints to stdout and wins
+    over ours in the MRO - but it doesn't define these two, so ours do."""
 
     def log_message(self, *args):
+        pass
+
+    def log_request(self, *args):
+        pass
+
+    def log_error(self, *args):
         pass
 
     def _json(self, payload, status=200, cookie=None):
