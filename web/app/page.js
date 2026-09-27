@@ -48,7 +48,6 @@ const NAV_ITEMS = [
   { label: "Assignments", icon: "tasks", tab: "task" },
   { label: "Calendar", icon: "calendar", tab: "deadline" },
   { label: "Courses", icon: "courses", tab: "courses" },
-  { label: "Settings", icon: "settings", tab: "settings" },
 ];
 
 const THEMES = [
@@ -290,31 +289,48 @@ export default function App() {
   return (
     <div data-theme={theme} style={customStyle} className="min-h-screen bg-[var(--page)] text-[var(--ink)]">
       <aside className={`sidebar ${mobileNav ? "sidebar-open" : ""}`}>
-        <div className="flex h-full flex-col overflow-y-auto">
-          <div className="flex items-center gap-3 px-6 py-7">
-            <div className="logo-mark"><span /><span /><span /></div>
-            <div className="text-xl font-bold tracking-tight">UBC Hub</div>
+        <div className="flex h-full flex-col">
+          <div className="flex-1 overflow-y-auto">
+            <div className="flex items-center gap-3 px-6 py-7">
+              <div className="logo-mark"><span /><span /><span /></div>
+              <div className="text-xl font-bold tracking-tight">UBC Hub</div>
+            </div>
+
+            <nav className="mt-4 flex flex-col gap-1 px-3">
+              {NAV_ITEMS.map((item) => (
+                <AppButton key={item.label} onClick={() => { setActiveNav(item.label); setMobileNav(false); }} className={`nav-item ${activeNav === item.label ? "nav-item-active" : ""}`}>
+                  <Icon name={item.icon} />
+                  <span>{item.label}</span>
+                </AppButton>
+              ))}
+            </nav>
+
+            <div className="mx-5 my-7 h-px bg-[var(--line)]" />
+            <div className="px-6 text-xs font-bold uppercase tracking-widest text-[var(--muted)]">Courses</div>
+            <div className="mt-4 flex flex-col gap-1 px-3">
+              {courses.map((course) => (
+                <AppButton key={course.code} onClick={() => { setActiveFilter(course.code); setMobileNav(false); }} className={`course-nav ${activeFilter === course.code ? "nav-item-active" : ""}`}>
+                  <span className="course-nav-mark">{course.code.slice(0, 2)}</span>
+                  <span className="min-w-0 flex-1 truncate text-left">{course.code}</span>
+                  <span className="text-xs font-bold text-[var(--muted)]">{selectCourseItems(activeItems, course.code).length}</span>
+                </AppButton>
+              ))}
+            </div>
           </div>
 
-          <nav className="mt-4 flex flex-col gap-1 px-3">
-            {NAV_ITEMS.map((item) => (
-              <AppButton key={item.label} onClick={() => { setActiveNav(item.label); setMobileNav(false); }} className={`nav-item ${activeNav === item.label ? "nav-item-active" : ""}`}>
-                <Icon name={item.icon} />
-                <span>{item.label}</span>
-              </AppButton>
-            ))}
-          </nav>
-
-          <div className="mx-5 my-7 h-px bg-[var(--line)]" />
-          <div className="px-6 text-xs font-bold uppercase tracking-widest text-[var(--muted)]">Courses</div>
-          <div className="mt-4 flex flex-col gap-1 px-3">
-            {courses.map((course) => (
-              <AppButton key={course.code} onClick={() => { setActiveFilter(course.code); setMobileNav(false); }} className={`course-nav ${activeFilter === course.code ? "nav-item-active" : ""}`}>
-                <span className="course-nav-mark">{course.code.slice(0, 2)}</span>
-                <span className="min-w-0 flex-1 truncate text-left">{course.code}</span>
-                <span className="text-xs font-bold text-[var(--muted)]">{selectCourseItems(activeItems, course.code).length}</span>
-              </AppButton>
-            ))}
+          <div className="flex items-center gap-3 border-t border-[var(--line)] px-4 py-4">
+            <div className="avatar">SD</div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-bold">Stu Dent</div>
+              <div className="truncate text-xs text-[var(--muted)]">Student</div>
+            </div>
+            <AppButton
+              ariaLabel="Settings"
+              onClick={() => { setActiveNav("Settings"); setMobileNav(false); }}
+              className={`icon-button ${activeNav === "Settings" ? "nav-item-active" : ""}`}
+            >
+              <Icon name="settings" className="size-4" />
+            </AppButton>
           </div>
         </div>
       </aside>
