@@ -327,6 +327,7 @@ export default function App() {
   }, [announcements, search]);
   const visibleAnnouncements = (activeFilter === "All" ? searchedAnnouncements : searchedAnnouncements.filter((item) => item.course === activeFilter)).slice(0, showN);
 
+  const topAssignments = selectVisibleItems(activeItems, { tab: "all", hideOverdue: false, showN: 5, now });
   const nextUp = selectNextUp(activeItems);
   const days = weekDates(now);
   const connections = selectConnections(items, importedCourses);
@@ -459,9 +460,46 @@ export default function App() {
 
           <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_19rem]">
             <section className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-card)]">
+              {activeNav === "Overview" ? (
+                <>
+                  <div className="flex items-center justify-between gap-4 border-b border-[var(--line)] p-5 sm:p-6">
+                    <div>
+                      <div className="text-xl font-bold tracking-tight">Top assignments</div>
+                      <div className="mt-1 text-sm text-[var(--muted)]">Your {topAssignments.length} most urgent, across every platform</div>
+                    </div>
+                    <AppButton onClick={() => setActiveNav("Assignments")} className="filter-button">View all</AppButton>
+                  </div>
+                  <div>
+                    {topAssignments.map((item) => (
+                      <div key={item.id} className="assignment-row">
+                        <span className="course-mark">{item.course.slice(0, 2)}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-bold">{item.title}</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-[var(--muted)]">
+                            <span>{item.course}</span><span>·</span><span>{item.kind}</span>
+                          </div>
+                        </div>
+                        <div className={`hidden shrink-0 rounded-lg px-3 py-2 text-right sm:block ${isOverdue(item, now) ? "due-now" : ""}`}>
+                          <div className="text-xs font-bold">{formatDue(item.due)}</div>
+                          <div className="mt-0.5 text-[0.7rem] text-[var(--muted)]">{displayLabel(item.urgency)}</div>
+                        </div>
+                        <a href={item.url} aria-label="Open"><Icon name="arrow" className="size-4 shrink-0 text-[var(--muted-light)]" /></a>
+                      </div>
+                    ))}
+                    {topAssignments.length === 0 && (
+                      <div className="p-10 text-center text-sm text-[var(--muted)]">
+                        {sampleMode ? "Nothing upcoming." : "Nothing yet. Connect Canvas or PrairieLearn above."}
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+              <>
               <div className="flex flex-col gap-4 border-b border-[var(--line)] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
                 <div>
-                  <div className="text-xl font-bold tracking-tight">Upcoming assignments</div>
+                  <div className="text-xl font-bold tracking-tight">
+                    {activeNavTab === "courses" ? "Courses" : activeNavTab === "announcements" ? "Announcements" : "Upcoming assignments"}
+                  </div>
                   <div className="mt-1 text-sm text-[var(--muted)]">Everything due across your connected platforms</div>
                 </div>
                 <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl bg-[var(--surface-soft)] p-1">
@@ -556,6 +594,8 @@ export default function App() {
                   </>
                 )}
               </div>
+              </>
+              )}
             </section>
 
             <aside className="space-y-5">
