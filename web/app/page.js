@@ -4,11 +4,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   connectCanvas,
   connectPrairieLearn,
+  connectPrairieLearnCustom,
+  connectPrairieLearnOk,
   displayLabel,
+  fetchAnnouncements,
   fetchCourses,
   fetchUpcoming,
   formatDue,
   hasItemDueOn,
+  hideCourseItems,
   isDone,
   isLocalMode,
   isOverdue,
@@ -17,6 +21,7 @@ import {
   selectConnections,
   selectCourseItems,
   selectNextUp,
+  selectVisibleCourses,
   selectVisibleItems,
   weekDates,
 } from "../lib/hub";
@@ -35,6 +40,8 @@ function Icon({ name, className = "size-5" }) {
     menu: <><path d="M4 7h16M4 12h16M4 17h16" /></>,
     spark: <><path d="m12 3 1.3 4.2L17 9l-3.7 1.8L12 15l-1.3-4.2L7 9l3.7-1.8L12 3Z" /><path d="m5 14 .7 2.3L8 17l-2.3.7L5 20l-.7-2.3L2 17l2.3-.7L5 14Z" /></>,
     settings: <><path d="M4 6h10M18 6h2M4 18h10M18 18h2M4 12h4M12 12h8" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="16" cy="18" r="2" /></>,
+    material: <><path d="M7 3h7l4 4v14H7z" /><path d="M14 3v4h4M9 12h6M9 16h6" /></>,
+    announcement: <><path d="M9 5 3 9v6h6l6 4V1z" /><path d="M16 8a4.5 4.5 0 0 1 0 8" /></>,
   };
   return <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
@@ -47,8 +54,9 @@ const NAV_ITEMS = [
   { label: "Overview", icon: "home", tab: "all" },
   { label: "Assignments", icon: "tasks", tab: "task" },
   { label: "Calendar", icon: "calendar", tab: "deadline" },
+  { label: "Materials", icon: "material", tab: "material" },
+  { label: "Announcements", icon: "announcement", tab: "announcements" },
   { label: "Courses", icon: "courses", tab: "courses" },
-  { label: "Settings", icon: "settings", tab: "settings" },
 ];
 
 const THEMES = [
@@ -70,24 +78,38 @@ const CUSTOM_COLOR_FIELDS = [
 ];
 
 const WEEKDAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
+const MAX_WORKDAY_FILE_BYTES = 5_000_000;
 
-function QuickActions({ sampleMode, onSampleModeChange, onConnected, onWorkdayImported }) {
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections, sampleMode, onSampleModeChange, onConnected, onWorkdayImported, allCourses, hiddenCourses, onToggleCourseHidden }) {
   const [term, setTerm] = useState("2026W1");
-  const [status, setStatus] = useState(null);
+  const [workdayStatus, setWorkdayStatus] = useState(null);
+  const [customDomain, setCustomDomain] = useState("");
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
+  const byId = Object.fromEntries(connections.map((c) => [c.id, c]));
+  const FIXED_IDS = new Set(["canvas", "prairielearn", "prairielearn_ok", "workday"]);
+  const customConnections = connections.filter((c) => !FIXED_IDS.has(c.id));
 
   async function handleFile(e) {
     const file = e.target.files[0];
     e.target.value = "";
     if (!file) return;
+    // A real "View My Courses" export is a few hundred rows of text - a
+    // generous cap well above that, mainly to reject something huge or
+    // corrupted before it ever reaches the parser (defense in depth
+    // alongside fixTruncatedRange's own sane-range clamp - see #49).
+    if (file.size > MAX_WORKDAY_FILE_BYTES) {
+      setWorkdayStatus(null);
+      setError(`That file is too large (${Math.round(file.size / 1_000_000)}MB) - a real Workday export is much smaller than ${MAX_WORKDAY_FILE_BYTES / 1_000_000}MB.`);
+      return;
+    }
     try {
       const buf = await file.arrayBuffer();
-      const courses = parseWorkdayCourses(buf, term);
-      onWorkdayImported(courses);
-      setStatus(`Imported ${courses.length} course${courses.length === 1 ? "" : "s"}.`);
+      const imported = parseWorkdayCourses(buf, term);
+      onWorkdayImported(imported);
+      setWorkdayStatus(`Imported ${imported.length} course${imported.length === 1 ? "" : "s"}.`);
     } catch (err) {
-      setStatus(null);
+      setWorkdayStatus(null);
       setError(err.message);
     }
   }
@@ -105,37 +127,6 @@ function QuickActions({ sampleMode, onSampleModeChange, onConnected, onWorkdayIm
     }
   }
 
-  return (
-    <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-5 shadow-[var(--shadow-card)]">
-      <div className="mb-4 font-bold">Quick actions</div>
-      <label className="toggle-pill mb-3 flex w-full items-center justify-between">
-        <span>Sample data</span>
-        <input type="checkbox" checked={sampleMode} onChange={(e) => onSampleModeChange(e.target.checked)} />
-      </label>
-      {isLocalMode() && !sampleMode && (
-        <div className="mb-3 flex flex-col gap-2">
-          <AppButton disabled={busy !== null} onClick={() => run("canvas", connectCanvas)} className="toggle-pill justify-center">
-            {busy === "canvas" ? "Signing in…" : "Connect Canvas"}
-          </AppButton>
-          <AppButton disabled={busy !== null} onClick={() => run("prairielearn", connectPrairieLearn)} className="toggle-pill justify-center">
-            {busy === "prairielearn" ? "Signing in…" : "Connect PrairieLearn"}
-          </AppButton>
-        </div>
-      )}
-      <div className="flex items-center gap-2">
-        <input type="text" value={term} onChange={(e) => setTerm(e.target.value)} size={7} className="rounded-md border border-[var(--line)] bg-[var(--surface-soft)] px-2 py-1 text-xs" />
-        <label className="toggle-pill flex-1 justify-center text-center">
-          Import Workday
-          <input type="file" accept=".xlsx" onChange={handleFile} className="sr-only" />
-        </label>
-      </div>
-      {status && <div className="mt-2 text-xs text-[var(--muted)]">{status}</div>}
-      {error && <div className="connect-error mt-2">{error}</div>}
-    </section>
-  );
-}
-
-function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections }) {
   return (
     <div className="max-w-2xl space-y-6">
       <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
@@ -184,19 +175,145 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
             ? "What's actually feeding your dashboard right now."
             : "This is the hosted demo, so Canvas and PrairieLearn can't connect here - run Hub locally to link a real account (see the README)."}
         </div>
+
+        <label className="toggle-pill mb-5 flex w-full items-center justify-between">
+          <span>Sample data</span>
+          <input type="checkbox" checked={sampleMode} onChange={(e) => onSampleModeChange(e.target.checked)} />
+        </label>
+
         <div className="divide-y divide-[var(--line)]">
-          {connections.map((c) => (
-            <div key={c.id} className="flex items-center justify-between py-3">
-              <div className="flex items-center gap-3">
-                <span className={`size-2.5 rounded-full ${c.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
-                <span className="font-bold">{c.label}</span>
-              </div>
-              <div className="text-right text-sm">
-                <div className={c.connected ? "font-bold text-[var(--success)]" : "text-[var(--muted)]"}>{c.connected ? "Connected" : "Not connected"}</div>
-                <div className="text-xs text-[var(--muted)]">{c.detail}</div>
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className={`size-2.5 rounded-full ${byId.canvas.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div>
+                <div className="font-bold">Canvas</div>
+                <div className="text-xs text-[var(--muted)]">{byId.canvas.connected ? "Connected" : "Not connected"} &middot; {byId.canvas.detail}</div>
               </div>
             </div>
+            {isLocalMode() && !sampleMode && (
+              <AppButton disabled={busy !== null} onClick={() => run("canvas", connectCanvas)} className="toggle-pill">
+                {busy === "canvas" ? "Signing in…" : byId.canvas.connected ? "Reconnect" : "Connect"}
+              </AppButton>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className={`size-2.5 rounded-full ${byId.prairielearn.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div>
+                <div className="font-bold">PrairieLearn</div>
+                <div className="text-xs text-[var(--muted)]">{byId.prairielearn.connected ? "Connected" : "Not connected"} &middot; {byId.prairielearn.detail}</div>
+              </div>
+            </div>
+            {isLocalMode() && !sampleMode && (
+              <AppButton disabled={busy !== null} onClick={() => run("prairielearn", connectPrairieLearn)} className="toggle-pill">
+                {busy === "prairielearn" ? "Signing in…" : byId.prairielearn.connected ? "Reconnect" : "Connect"}
+              </AppButton>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className={`size-2.5 rounded-full ${byId.prairielearn_ok.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div>
+                <div className="font-bold">PrairieLearn (Okanagan)</div>
+                <div className="text-xs text-[var(--muted)]">{byId.prairielearn_ok.connected ? "Connected" : "Not connected"} &middot; {byId.prairielearn_ok.detail}</div>
+              </div>
+            </div>
+            {isLocalMode() && !sampleMode && (
+              <AppButton disabled={busy !== null} onClick={() => run("prairielearn_ok", connectPrairieLearnOk)} className="toggle-pill">
+                {busy === "prairielearn_ok" ? "Signing in…" : byId.prairielearn_ok.connected ? "Reconnect" : "Connect"}
+              </AppButton>
+            )}
+          </div>
+
+          {customConnections.map((c) => (
+            <div key={c.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+              <div className="flex items-center gap-3">
+                <span className="size-2.5 rounded-full bg-[var(--success)]" />
+                <div>
+                  <div className="font-bold">{c.label}</div>
+                  <div className="text-xs text-[var(--muted)]">Connected &middot; {c.detail}</div>
+                </div>
+              </div>
+              {isLocalMode() && !sampleMode && (
+                <AppButton disabled={busy !== null} onClick={() => run(c.id, () => connectPrairieLearnCustom(`https://${c.id}`))} className="toggle-pill">
+                  {busy === c.id ? "Signing in…" : "Reconnect"}
+                </AppButton>
+              )}
+            </div>
           ))}
+
+          {isLocalMode() && !sampleMode && (
+            <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+              <div className="flex items-center gap-3">
+                <span className="size-2.5 rounded-full bg-[var(--muted-light)]" />
+                <div>
+                  <div className="font-bold">Different PrairieLearn?</div>
+                  <div className="text-xs text-[var(--muted)]">Any school can self-host their own - paste its address (e.g. https://prairielearn.example.edu)</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={customDomain}
+                  onChange={(e) => setCustomDomain(e.target.value)}
+                  placeholder="https://prairielearn.example.edu"
+                  aria-label="Custom PrairieLearn URL"
+                  className="w-56 rounded-md border border-[var(--line)] bg-[var(--surface-soft)] px-2 py-1 text-xs"
+                />
+                <AppButton disabled={busy !== null || !customDomain} onClick={() => run("prairielearn_custom", () => connectPrairieLearnCustom(customDomain))} className="toggle-pill">
+                  {busy === "prairielearn_custom" ? "Signing in…" : "Connect"}
+                </AppButton>
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className={`size-2.5 rounded-full ${byId.workday.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div>
+                <div className="font-bold">Workday</div>
+                <div className="text-xs text-[var(--muted)]">{byId.workday.connected ? "Imported" : "Not imported"} &middot; {byId.workday.detail}</div>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <input type="text" value={term} onChange={(e) => setTerm(e.target.value)} size={7} aria-label="Term" className="rounded-md border border-[var(--line)] bg-[var(--surface-soft)] px-2 py-1 text-xs" />
+              <label className="toggle-pill cursor-pointer">
+                Import .xlsx
+                <input type="file" accept=".xlsx" onChange={handleFile} className="sr-only" />
+              </label>
+            </div>
+          </div>
+        </div>
+        {isLocalMode() && sampleMode && (
+          <div className="mt-3 text-xs text-[var(--muted)]">Turn off Sample data above to connect a real Canvas or PrairieLearn account.</div>
+        )}
+        {workdayStatus && <div className="mt-3 text-xs text-[var(--muted)]">{workdayStatus}</div>}
+        {error && <div className="connect-error mt-3">{error}</div>}
+      </section>
+
+      <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
+        <div className="mb-1 text-xl font-bold tracking-tight">Courses</div>
+        <div className="mb-5 text-sm text-[var(--muted)]">
+          Hide old or inactive courses a provider still lists (Canvas, especially, likes to keep listing ones you're not really in this term) - a hidden course disappears everywhere, not just here.
+        </div>
+        <div className="divide-y divide-[var(--line)]">
+          {allCourses.map((c) => (
+            <label key={c.code} className="flex cursor-pointer items-center justify-between gap-3 py-3">
+              <div className="min-w-0">
+                <div className="font-bold">{c.code}</div>
+                <div className="truncate text-xs text-[var(--muted)]">{c.title}</div>
+              </div>
+              <input
+                type="checkbox"
+                checked={!hiddenCourses.includes(c.code)}
+                onChange={(e) => onToggleCourseHidden(c.code, e.target.checked)}
+                aria-label={`Show ${c.code}`}
+              />
+            </label>
+          ))}
+          {allCourses.length === 0 && <div className="py-3 text-sm text-[var(--muted)]">No courses yet.</div>}
         </div>
       </section>
     </div>
@@ -213,11 +330,18 @@ export default function App() {
   const [theme, setTheme] = useState("everforest");
   const [customColors, setCustomColors] = useState(DEFAULT_CUSTOM_COLORS);
 
-  const [sampleMode, setSampleMode] = useState(true);
+  // First-time default: off in local mode (a local run means someone's about
+  // to connect a real account, so show that path immediately rather than
+  // hiding it behind fake data - matches the hosted demo, where real data
+  // shows immediately) - on everywhere else, matching app.py's
+  // st.toggle(value=True). Overridden below by whatever was saved last.
+  const [sampleMode, setSampleMode] = useState(!isLocalMode());
   const [items, setItems] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
   const [fetchedCourses, setFetchedCourses] = useState([]);
   const [importedCourses, setImportedCourses] = useState([]);
   const [loadError, setLoadError] = useState(null);
+  const [hiddenCourses, setHiddenCourses] = useState([]);
   const loadRequestId = useRef(0);
 
   useEffect(() => {
@@ -228,6 +352,18 @@ export default function App() {
     } catch {
       // ignore malformed/missing storage - keep the default
     }
+    // Once the student has actually chosen (either way), that choice sticks
+    // across reloads - so a real connection doesn't silently revert to fake
+    // data, and so someone who deliberately wants sample data in local mode
+    // keeps seeing it.
+    const savedSampleMode = localStorage.getItem("gather-sample-mode");
+    if (savedSampleMode !== null) setSampleMode(savedSampleMode === "true");
+    try {
+      const saved = JSON.parse(localStorage.getItem("gather-hidden-courses"));
+      if (Array.isArray(saved)) setHiddenCourses(saved);
+    } catch {
+      // ignore malformed/missing storage - keep the default (nothing hidden)
+    }
   }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -236,6 +372,16 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem("gather-custom-colors", JSON.stringify(customColors));
   }, [customColors]);
+  useEffect(() => {
+    localStorage.setItem("gather-sample-mode", String(sampleMode));
+  }, [sampleMode]);
+  useEffect(() => {
+    localStorage.setItem("gather-hidden-courses", JSON.stringify(hiddenCourses));
+  }, [hiddenCourses]);
+
+  function toggleCourseHidden(code, visible) {
+    setHiddenCourses((prev) => (visible ? prev.filter((c) => c !== code) : [...prev, code]));
+  }
 
   async function load(useSample) {
     // A slow local-mode response can land after the student has already
@@ -255,6 +401,15 @@ export default function App() {
       setFetchedCourses([]);
       setLoadError(e.message);
     }
+    // Announcements are a separate, best-effort feed (GET /api/announcements
+    // isn't on every backend yet - e.g. before #50 merges) - a missing or
+    // failing endpoint shouldn't take the rest of the dashboard down with it
+    // the way a failed items/courses fetch does.
+    try {
+      setAnnouncements(await fetchAnnouncements(useSample));
+    } catch {
+      setAnnouncements([]);
+    }
   }
 
   function importWorkdayCourses(imported) {
@@ -267,9 +422,10 @@ export default function App() {
   }, [sampleMode]);
 
   const now = new Date();
-  const courses = mergeCourses(fetchedCourses, importedCourses);
-  const activeItems = selectActiveItems(items);
-  const doneCount = items.filter(isDone).length;
+  const allCourses = mergeCourses(fetchedCourses, importedCourses);
+  const courses = selectVisibleCourses(allCourses, hiddenCourses);
+  const activeItems = hideCourseItems(selectActiveItems(items), hiddenCourses);
+  const doneCount = hideCourseItems(items, hiddenCourses).filter(isDone).length;
   const overdueCount = activeItems.filter((item) => isOverdue(item, now)).length;
   const dueThisWeekCount = activeItems.filter((item) => {
     if (!item.due) return false;
@@ -287,6 +443,16 @@ export default function App() {
 
   const filteredByCourse = activeFilter === "All" ? searched : searched.filter((item) => item.course === activeFilter);
   const visible = selectVisibleItems(filteredByCourse, { tab: activeNavTab, hideOverdue, showN, now });
+
+  const searchedAnnouncements = useMemo(() => {
+    const visibleAnnouncementsBase = hideCourseItems(announcements, hiddenCourses);
+    const term = search.toLowerCase();
+    if (!term) return visibleAnnouncementsBase;
+    return visibleAnnouncementsBase.filter((item) => item.title.toLowerCase().includes(term) || item.course.toLowerCase().includes(term));
+  }, [announcements, hiddenCourses, search]);
+  const visibleAnnouncements = (activeFilter === "All" ? searchedAnnouncements : searchedAnnouncements.filter((item) => item.course === activeFilter)).slice(0, showN);
+
+  const topAssignments = selectVisibleItems(activeItems, { tab: "all", hideOverdue: false, showN: 5, now });
   const nextUp = selectNextUp(activeItems);
   const days = weekDates(now);
   const connections = selectConnections(items, importedCourses);
@@ -298,31 +464,48 @@ export default function App() {
   return (
     <div data-theme={theme} style={customStyle} className="min-h-screen bg-[var(--page)] text-[var(--ink)]">
       <aside className={`sidebar ${mobileNav ? "sidebar-open" : ""}`}>
-        <div className="flex h-full flex-col overflow-y-auto">
-          <div className="flex items-center gap-3 px-6 py-7">
-            <div className="logo-mark"><span /><span /><span /></div>
-            <div className="text-xl font-bold tracking-tight">UBC Hub</div>
+        <div className="flex h-full flex-col">
+          <div className="flex-1 overflow-y-auto">
+            <div className="flex items-center gap-3 px-6 py-7">
+              <div className="logo-mark"><span /><span /><span /></div>
+              <div className="text-xl font-bold tracking-tight">UBC Hub</div>
+            </div>
+
+            <nav className="mt-4 flex flex-col gap-1 px-3">
+              {NAV_ITEMS.map((item) => (
+                <AppButton key={item.label} onClick={() => { setActiveNav(item.label); setMobileNav(false); }} className={`nav-item ${activeNav === item.label ? "nav-item-active" : ""}`}>
+                  <Icon name={item.icon} />
+                  <span>{item.label}</span>
+                </AppButton>
+              ))}
+            </nav>
+
+            <div className="mx-5 my-7 h-px bg-[var(--line)]" />
+            <div className="px-6 text-xs font-bold uppercase tracking-widest text-[var(--muted)]">Courses</div>
+            <div className="mt-4 flex flex-col gap-1 px-3">
+              {courses.map((course) => (
+                <AppButton key={course.code} onClick={() => { setActiveFilter(course.code); setMobileNav(false); }} className={`course-nav ${activeFilter === course.code ? "nav-item-active" : ""}`}>
+                  <span className="course-nav-mark">{course.code.slice(0, 2)}</span>
+                  <span className="min-w-0 flex-1 truncate text-left">{course.code}</span>
+                  <span className="text-xs font-bold text-[var(--muted)]">{selectCourseItems(activeItems, course.code).length}</span>
+                </AppButton>
+              ))}
+            </div>
           </div>
 
-          <nav className="mt-4 flex flex-col gap-1 px-3">
-            {NAV_ITEMS.map((item) => (
-              <AppButton key={item.label} onClick={() => { setActiveNav(item.label); setMobileNav(false); }} className={`nav-item ${activeNav === item.label ? "nav-item-active" : ""}`}>
-                <Icon name={item.icon} />
-                <span>{item.label}</span>
-              </AppButton>
-            ))}
-          </nav>
-
-          <div className="mx-5 my-7 h-px bg-[var(--line)]" />
-          <div className="px-6 text-xs font-bold uppercase tracking-widest text-[var(--muted)]">Courses</div>
-          <div className="mt-4 flex flex-col gap-1 px-3">
-            {courses.map((course) => (
-              <AppButton key={course.code} onClick={() => { setActiveFilter(course.code); setMobileNav(false); }} className={`course-nav ${activeFilter === course.code ? "nav-item-active" : ""}`}>
-                <span className="course-nav-mark">{course.code.slice(0, 2)}</span>
-                <span className="min-w-0 flex-1 truncate text-left">{course.code}</span>
-                <span className="text-xs font-bold text-[var(--muted)]">{selectCourseItems(activeItems, course.code).length}</span>
-              </AppButton>
-            ))}
+          <div className="flex items-center gap-3 border-t border-[var(--line)] px-4 py-4">
+            <div className="avatar">SD</div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm font-bold">Stu Dent</div>
+              <div className="truncate text-xs text-[var(--muted)]">Student</div>
+            </div>
+            <AppButton
+              ariaLabel="Settings"
+              onClick={() => { setActiveNav("Settings"); setMobileNav(false); }}
+              className={`icon-button ${activeNav === "Settings" ? "nav-item-active" : ""}`}
+            >
+              <Icon name="settings" className="size-4" />
+            </AppButton>
           </div>
         </div>
       </aside>
@@ -340,7 +523,20 @@ export default function App() {
 
         <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
           {activeNav === "Settings" ? (
-            <SettingsPage theme={theme} setTheme={setTheme} customColors={customColors} setCustomColors={setCustomColors} connections={connections} />
+            <SettingsPage
+              theme={theme}
+              setTheme={setTheme}
+              customColors={customColors}
+              setCustomColors={setCustomColors}
+              connections={connections}
+              sampleMode={sampleMode}
+              onSampleModeChange={setSampleMode}
+              onConnected={() => load(false)}
+              onWorkdayImported={importWorkdayCourses}
+              allCourses={allCourses}
+              hiddenCourses={hiddenCourses}
+              onToggleCourseHidden={toggleCourseHidden}
+            />
           ) : (
           <>
           <section className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
@@ -392,9 +588,46 @@ export default function App() {
 
           <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_19rem]">
             <section className="overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface)] shadow-[var(--shadow-card)]">
+              {activeNav === "Overview" ? (
+                <>
+                  <div className="flex items-center justify-between gap-4 border-b border-[var(--line)] p-5 sm:p-6">
+                    <div>
+                      <div className="text-xl font-bold tracking-tight">Top assignments</div>
+                      <div className="mt-1 text-sm text-[var(--muted)]">Your {topAssignments.length} most urgent, across every platform</div>
+                    </div>
+                    <AppButton onClick={() => setActiveNav("Assignments")} className="filter-button">View all</AppButton>
+                  </div>
+                  <div>
+                    {topAssignments.map((item) => (
+                      <div key={item.id} className="assignment-row">
+                        <span className="course-mark">{item.course.slice(0, 2)}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-bold">{item.title}</div>
+                          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-[var(--muted)]">
+                            <span>{item.course}</span><span>·</span><span>{item.kind}</span>
+                          </div>
+                        </div>
+                        <div className={`hidden shrink-0 rounded-lg px-3 py-2 text-right sm:block ${isOverdue(item, now) ? "due-now" : ""}`}>
+                          <div className="text-xs font-bold">{formatDue(item.due)}</div>
+                          <div className="mt-0.5 text-[0.7rem] text-[var(--muted)]">{displayLabel(item.urgency)}</div>
+                        </div>
+                        <a href={item.url} aria-label="Open"><Icon name="arrow" className="size-4 shrink-0 text-[var(--muted-light)]" /></a>
+                      </div>
+                    ))}
+                    {topAssignments.length === 0 && (
+                      <div className="p-10 text-center text-sm text-[var(--muted)]">
+                        {sampleMode ? "Nothing upcoming." : "Nothing yet. Connect Canvas or PrairieLearn above."}
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+              <>
               <div className="flex flex-col gap-4 border-b border-[var(--line)] p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
                 <div>
-                  <div className="text-xl font-bold tracking-tight">Upcoming assignments</div>
+                  <div className="text-xl font-bold tracking-tight">
+                    {activeNavTab === "courses" ? "Courses" : activeNavTab === "announcements" ? "Announcements" : "Upcoming assignments"}
+                  </div>
                   <div className="mt-1 text-sm text-[var(--muted)]">Everything due across your connected platforms</div>
                 </div>
                 <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl bg-[var(--surface-soft)] p-1">
@@ -410,14 +643,33 @@ export default function App() {
                   <input type="range" min={5} max={50} value={showN} onChange={(e) => setShowN(Number(e.target.value))} />{" "}
                   {showN}
                 </label>
-                <label className="flex items-center gap-2">
-                  <input type="checkbox" checked={hideOverdue} onChange={(e) => setHideOverdue(e.target.checked)} />
-                  Hide overdue
-                </label>
+                {activeNavTab !== "announcements" && (
+                  <label className="flex items-center gap-2">
+                    <input type="checkbox" checked={hideOverdue} onChange={(e) => setHideOverdue(e.target.checked)} />
+                    Hide overdue
+                  </label>
+                )}
               </div>
 
               <div>
-                {activeNavTab === "courses" ? (
+                {activeNavTab === "announcements" ? (
+                  visibleAnnouncements.length === 0 ? (
+                    <div className="p-10 text-center text-sm text-[var(--muted)]">
+                      {sampleMode ? "No announcements in sample data." : "Nothing yet. Connect Canvas above."}
+                    </div>
+                  ) : (
+                    visibleAnnouncements.map((item) => (
+                      <div key={item.id} className="assignment-row">
+                        <span className="course-mark">{item.course.slice(0, 2)}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-bold">{item.title}</div>
+                          <div className="mt-1 text-xs font-medium text-[var(--muted)]">{item.course}</div>
+                        </div>
+                        <a href={item.url} aria-label="Open"><Icon name="arrow" className="size-4 shrink-0 text-[var(--muted-light)]" /></a>
+                      </div>
+                    ))
+                  )
+                ) : activeNavTab === "courses" ? (
                   courses.length === 0 ? (
                     <div className="p-10 text-center text-sm text-[var(--muted)]">
                       {sampleMode ? "No courses." : "Nothing yet. Connect Canvas above."}
@@ -436,7 +688,7 @@ export default function App() {
                             <span className="course-mark">{item.course.slice(0, 2)}</span>
                             <div className="min-w-0 flex-1">
                               <div className="truncate font-bold">{item.title}</div>
-                              <div className="text-xs text-[var(--muted)]">{displayLabel(item.urgency)} &middot; {formatDue(item.due)}</div>
+                              <div className="text-xs text-[var(--muted)]">{item.kind} &middot; {displayLabel(item.urgency)} &middot; {formatDue(item.due)}</div>
                             </div>
                             <a href={item.url} className="text-xs font-bold text-[var(--accent)]">open</a>
                           </div>
@@ -453,9 +705,12 @@ export default function App() {
                           <div className="truncate font-bold">{item.title}</div>
                           <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-medium text-[var(--muted)]">
                             <span>{item.course}</span><span>·</span><span>{item.kind}</span>
+                            {/* The boxed due-date badge below is sm:+ only - repeat it as
+                                plain text here so due dates aren't lost below that breakpoint. */}
+                            <span className={`sm:hidden ${isOverdue(item, now) ? "font-bold text-[var(--danger)]" : ""}`}>· {formatDue(item.due)}</span>
                           </div>
                         </div>
-                        <div className={`shrink-0 rounded-lg px-2 py-1.5 text-right sm:px-3 sm:py-2 ${isOverdue(item, now) ? "due-now" : ""}`}>
+                        <div className={`hidden shrink-0 rounded-lg px-3 py-2 text-right sm:block ${isOverdue(item, now) ? "due-now" : ""}`}>
                           <div className="text-xs font-bold">{formatDue(item.due)}</div>
                           <div className="mt-0.5 text-[0.7rem] text-[var(--muted)]">{displayLabel(item.urgency)}</div>
                         </div>
@@ -470,6 +725,8 @@ export default function App() {
                   </>
                 )}
               </div>
+              </>
+              )}
             </section>
 
             <aside className="space-y-5">
@@ -493,12 +750,9 @@ export default function App() {
                 )}
               </section>
 
-              <QuickActions
-                sampleMode={sampleMode}
-                onSampleModeChange={setSampleMode}
-                onConnected={() => load(false)}
-                onWorkdayImported={importWorkdayCourses}
-              />
+              <AppButton onClick={() => setActiveNav("Settings")} className="toggle-pill w-full justify-center">
+                Manage connections in Settings
+              </AppButton>
             </aside>
           </div>
           </>

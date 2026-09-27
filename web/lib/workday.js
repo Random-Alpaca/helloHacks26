@@ -49,13 +49,22 @@ export function courseFromListing(listing, term) {
 // (confirmed against a real export, not just a theoretical worry - matches
 // the same fix ubc-workday2cal's prior art needed). Recompute !ref from the
 // real cell addresses before reading rows.
-function fixTruncatedRange(sheet) {
+// A real Workday "View My Courses" export never has more than a few hundred
+// rows/columns - these are generous ceilings, not a tight estimate, just far
+// below Excel's actual max (XFD1048576). A stray cell out at that theoretical
+// max (seen in a real file) would otherwise blow maxRow/maxCol up to it, and
+// sheet_to_json would then try to materialize ~17B cells and hang.
+const MAX_SANE_ROW = 10_000;
+const MAX_SANE_COL = 500;
+
+export function fixTruncatedRange(sheet) {
   const addresses = Object.keys(sheet).filter((k) => !k.startsWith("!"));
   if (addresses.length === 0) return;
   let maxRow = 0;
   let maxCol = 0;
   for (const addr of addresses) {
     const { r, c } = XLSX.utils.decode_cell(addr);
+    if (r > MAX_SANE_ROW || c > MAX_SANE_COL) continue;
     if (r > maxRow) maxRow = r;
     if (c > maxCol) maxCol = c;
   }

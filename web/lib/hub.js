@@ -93,6 +93,19 @@ export async function fetchUpcoming(useSample) {
   return rows.map(normaliseApiItem);
 }
 
+// Announcements never carry a due date (they're informational, not a task -
+// see hub/canvas.py's to_item()), so they're a separate feed from
+// fetchUpcoming() rather than items mixed into it. Sample mode has none -
+// none of SAMPLE_ROWS is announcement-shaped, so there's nothing to fake.
+export async function fetchAnnouncements(useSample) {
+  const base = apiBase();
+  if (!base || useSample) return [];
+  const res = await fetch(`${base}/api/announcements`);
+  if (!res.ok) throw new Error(`GET /api/announcements failed: ${res.status}`);
+  const rows = await res.json();
+  return rows.map(normaliseApiItem);
+}
+
 export async function fetchCourses(useSample) {
   const base = apiBase();
   if (!base || useSample) return SAMPLE_COURSES;
@@ -115,6 +128,32 @@ export async function connectPrairieLearn() {
   const res = await fetch(`${base}/api/connect/prairielearn`, { method: "POST" });
   if (!res.ok) throw new Error(`POST /api/connect/prairielearn failed: ${res.status}`);
   return res.json();
+}
+
+export async function connectPrairieLearnOk() {
+  const base = apiBase();
+  if (!base) throw new Error("connectPrairieLearnOk() only works in local mode");
+  const res = await fetch(`${base}/api/connect/prairielearn_ok`, { method: "POST" });
+  if (!res.ok) throw new Error(`POST /api/connect/prairielearn_ok failed: ${res.status}`);
+  return res.json();
+}
+
+// For a PrairieLearn instance we don't have a quick-connect button for -
+// any department can self-host their own (hub/prairielearn.py's
+// resolve_campus() accepts a full URL, not just a known key). `domain`
+// should be a bare "https://..." origin; the backend validates and rejects
+// anything else before it ever reaches a real login window.
+export async function connectPrairieLearnCustom(domain) {
+  const base = apiBase();
+  if (!base) throw new Error("connectPrairieLearnCustom() only works in local mode");
+  const res = await fetch(`${base}/api/connect/prairielearn_custom`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `POST /api/connect/prairielearn_custom failed: ${res.status}`);
+  return body;
 }
 
 // Sort by urgency (matches hub.logic.sort_items's order) when the backend
@@ -194,6 +233,19 @@ export function selectActiveItems(items) {
   return items.filter((item) => !isDone(item));
 }
 
+// A hidden course (Settings - for the old/inactive enrollments Canvas keeps
+// listing) disappears everywhere: the sidebar, filter chips, Courses tab,
+// and any of its items in every other view - not just its own row. This is
+// display-only, client-side (hiddenCourses is never sent anywhere) - the
+// course and its items stay exactly as fetched in hub.db.
+export function selectVisibleCourses(courses, hiddenCourses) {
+  return courses.filter((c) => !hiddenCourses.includes(c.code));
+}
+
+export function hideCourseItems(items, hiddenCourses) {
+  return items.filter((item) => !hiddenCourses.includes(item.course));
+}
+
 // The flat item list for a given tab/toggle/limit combination. Expects
 // already-active (non-done) items - see selectActiveItems.
 export function selectVisibleItems(items, { tab, hideOverdue, showN, now }) {
@@ -243,11 +295,30 @@ function sameDay(a, b) {
 // flag (sample data never sets item.source, so it correctly shows as
 // disconnected everywhere). Workday isn't a login - it's a file the student
 // already has - so "connected" means "imported this session", not "logged in".
+const KNOWN_PROVIDERS = [
+  { id: "canvas", label: "Canvas" },
+  { id: "prairielearn", label: "PrairieLearn" },
+  { id: "prairielearn_ok", label: "PrairieLearn (Okanagan)" },
+];
+
+function countOf(n, noun) {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
 export function selectConnections(items, importedCourses) {
   const countBySource = (source) => items.filter((item) => item.source === source).length;
-  return [
-    { id: "canvas", label: "Canvas", connected: countBySource("canvas") > 0, detail: `${countBySource("canvas")} item${countBySource("canvas") === 1 ? "" : "s"}` },
-    { id: "prairielearn", label: "PrairieLearn", connected: countBySource("prairielearn") > 0, detail: `${countBySource("prairielearn")} item${countBySource("prairielearn") === 1 ? "" : "s"}` },
-    { id: "workday", label: "Workday", connected: importedCourses.length > 0, detail: `${importedCourses.length} course${importedCourses.length === 1 ? "" : "s"} imported` },
-  ];
+  const rows = KNOWN_PROVIDERS.map(({ id, label }) => ({ id, label, connected: countBySource(id) > 0, detail: countOf(countBySource(id), "item") }));
+
+  // Any other source is a PrairieLearn instance a student pasted in
+  // directly (hub/prairielearn.py's resolve_campus() accepts one) - a
+  // hardcoded list can never cover every self-hosted instance, so these
+  // show up dynamically instead of needing their own KNOWN_PROVIDERS entry.
+  const knownIds = new Set(KNOWN_PROVIDERS.map((p) => p.id));
+  const customSources = [...new Set(items.map((item) => item.source))].filter((s) => s && !knownIds.has(s));
+  for (const source of customSources) {
+    rows.push({ id: source, label: `PrairieLearn (${source})`, connected: true, detail: countOf(countBySource(source), "item") });
+  }
+
+  rows.push({ id: "workday", label: "Workday", connected: importedCourses.length > 0, detail: `${countOf(importedCourses.length, "course")} imported` });
+  return rows;
 }
