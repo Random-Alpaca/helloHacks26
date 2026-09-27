@@ -35,6 +35,7 @@ function Icon({ name, className = "size-5" }) {
     menu: <><path d="M4 7h16M4 12h16M4 17h16" /></>,
     spark: <><path d="m12 3 1.3 4.2L17 9l-3.7 1.8L12 15l-1.3-4.2L7 9l3.7-1.8L12 3Z" /><path d="m5 14 .7 2.3L8 17l-2.3.7L5 20l-.7-2.3L2 17l2.3-.7L5 14Z" /></>,
     settings: <><path d="M4 6h10M18 6h2M4 18h10M18 18h2M4 12h4M12 12h8" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="16" cy="18" r="2" /></>,
+    material: <><path d="M7 3h7l4 4v14H7z" /><path d="M14 3v4h4M9 12h6M9 16h6" /></>,
   };
   return <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
@@ -47,6 +48,7 @@ const NAV_ITEMS = [
   { label: "Overview", icon: "home", tab: "all" },
   { label: "Assignments", icon: "tasks", tab: "task" },
   { label: "Calendar", icon: "calendar", tab: "deadline" },
+  { label: "Materials", icon: "material", tab: "material" },
   { label: "Courses", icon: "courses", tab: "courses" },
   { label: "Settings", icon: "settings", tab: "settings" },
 ];
@@ -228,7 +230,12 @@ export default function App() {
   const [theme, setTheme] = useState("everforest");
   const [customColors, setCustomColors] = useState(DEFAULT_CUSTOM_COLORS);
 
-  const [sampleMode, setSampleMode] = useState(true);
+  // First-time default: off in local mode (a local run means someone's about
+  // to connect a real account, so show that path immediately rather than
+  // hiding it behind fake data - matches the hosted demo, where real data
+  // shows immediately) - on everywhere else, matching app.py's
+  // st.toggle(value=True). Overridden below by whatever was saved last.
+  const [sampleMode, setSampleMode] = useState(!isLocalMode());
   const [items, setItems] = useState([]);
   const [fetchedCourses, setFetchedCourses] = useState([]);
   const [importedCourses, setImportedCourses] = useState([]);
@@ -242,10 +249,10 @@ export default function App() {
     } catch {
       // ignore malformed/missing storage - keep the default
     }
-    // Sample data defaults to on for a first-time visitor (matches app.py's
-    // st.toggle(value=True)) - only override that default once we know the
-    // student turned it off before, so a real Canvas/PrairieLearn connection
-    // doesn't silently revert to fake data on the next reload.
+    // Once the student has actually chosen (either way), that choice sticks
+    // across reloads - so a real connection doesn't silently revert to fake
+    // data, and so someone who deliberately wants sample data in local mode
+    // keeps seeing it.
     const savedSampleMode = localStorage.getItem("gather-sample-mode");
     if (savedSampleMode !== null) setSampleMode(savedSampleMode === "true");
   }, []);
@@ -462,7 +469,7 @@ export default function App() {
                             <span className="course-mark">{item.course.slice(0, 2)}</span>
                             <div className="min-w-0 flex-1">
                               <div className="truncate font-bold">{item.title}</div>
-                              <div className="text-xs text-[var(--muted)]">{displayLabel(item.urgency)} &middot; {formatDue(item.due)}</div>
+                              <div className="text-xs text-[var(--muted)]">{item.kind} &middot; {displayLabel(item.urgency)} &middot; {formatDue(item.due)}</div>
                             </div>
                             <a href={item.url} className="text-xs font-bold text-[var(--accent)]">open</a>
                           </div>
