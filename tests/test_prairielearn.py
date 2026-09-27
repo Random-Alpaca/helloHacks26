@@ -1,7 +1,10 @@
 import pytest
 from bs4 import BeautifulSoup
 
-from hub.prairielearn import BASE, due_from_popover, to_course, to_item, _course_instances, _run
+from hub.prairielearn import (
+    BASE, done_from_credit, done_from_score, due_from_popover, to_course, to_item,
+    _course_instances, _run,
+)
 
 # Real markup captured from a live UBC PrairieLearn course (CPSC 317, 2026W1).
 OPEN_ROW = """
@@ -28,6 +31,29 @@ NOT_OPEN_ROW = """
   <td class="align-middle"><span class="text-muted">Implementing a DNS Client</span></td>
   <td class="text-center align-middle"><span class="text-muted">Available 09:00, Mon, Sep 28</span></td>
   <td class="text-center align-middle">Not started</td>
+</tr>
+"""
+# Real markup from the same live course: the credit schedule has fully
+# expired (no popover, no "Available" notice - nothing left in that column
+# at all), and the score never reached 100%.
+CLOSED_ROW = """
+<tr>
+  <td class="align-middle" style="width: 1%"><span data-testid="assessment-set-badge">QUIZ</span></td>
+  <td class="align-middle"><a href="/pl/course_instance/221053/assessment_instance/1">Network Delay</a></td>
+  <td class="text-center align-middle"></td>
+  <td class="text-center align-middle">80%</td>
+</tr>
+"""
+# Real false positive found in review (#15/#71): allowSubmissions=true,
+# credit=0 after the last deadline also empties the credit column, but the
+# assessment was never attempted at all - not finished, just no longer
+# worth points.
+CLOSED_BUT_NEVER_ATTEMPTED_ROW = """
+<tr>
+  <td class="align-middle" style="width: 1%"><span data-testid="assessment-set-badge">PRAC</span></td>
+  <td class="align-middle"><a href="/pl/course_instance/221053/assessment_instance/2">Modern Past Due Practice</a></td>
+  <td class="text-center align-middle"></td>
+  <td class="text-center align-middle">0%</td>
 </tr>
 """
 
@@ -65,6 +91,52 @@ def test_group_heading_maps_quiz_and_exam():
 
 def test_last_tier_with_no_end_date_is_none():
     assert due_from_popover(None) is None
+
+
+def test_a_100_percent_score_is_done():
+    assert to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments", "221053").done is True
+
+
+def test_not_started_is_not_done():
+    assert to_item(row(NOT_OPEN_ROW), "CPSC 317", "Programming Assignments", "221053").done is False
+
+
+def test_a_partial_score_is_not_done():
+    # Partial credit is still improvable until the assessment closes - only
+    # a 100% score means nothing is left to do here.
+    partial_row = row(OPEN_ROW.replace('">100%</td>', '">85%</td>'))
+    assert done_from_score(partial_row.select("td")) is False
+
+
+def test_done_from_score_handles_a_short_row_without_crashing():
+    assert done_from_score(row(NOT_OPEN_ROW).select("td")[:2]) is None
+
+
+def test_a_closed_assessment_with_no_available_credit_is_done_even_under_100_percent():
+    # Real shape: the credit schedule fully expired (empty 3rd column), and
+    # the score (80%) never reached 100% - done_from_score alone would miss
+    # this, since there's nothing left the student can do to change it.
+    assert to_item(row(CLOSED_ROW), "CPSC 317", "Quizzes", "221053").done is True
+
+
+def test_done_from_credit_is_true_only_when_the_column_is_truly_empty():
+    assert done_from_credit(row(CLOSED_ROW).select("td")) is True
+
+
+def test_a_never_attempted_zero_credit_practice_assessment_is_not_done():
+    # The false positive PM review found: allowSubmissions=true, credit=0
+    # after the last deadline also empties the credit column, but nothing
+    # was ever attempted - an empty credit cell alone isn't "done" unless
+    # the score is also nonzero.
+    item = to_item(row(CLOSED_BUT_NEVER_ATTEMPTED_ROW), "CPSC 317", "Quizzes", "221053")
+    assert item.done is False
+    assert done_from_credit(row(CLOSED_BUT_NEVER_ATTEMPTED_ROW).select("td")) is False
+    assert done_from_credit(row(NOT_OPEN_ROW).select("td")) is False  # "Available <time>" notice
+    assert done_from_credit(row(OPEN_ROW).select("td")) is False  # still has its popover button
+
+
+def test_done_from_credit_handles_a_short_row_without_crashing():
+    assert done_from_credit(row(NOT_OPEN_ROW).select("td")[:1]) is False
 
 
 def test_mst_is_a_recognized_offset_alongside_pst_and_pdt():

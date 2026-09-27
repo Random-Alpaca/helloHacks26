@@ -92,6 +92,48 @@ def due_from_popover(popover_html):
     return datetime.fromisoformat(dt_str).replace(tzinfo=timezone(timedelta(hours=TZ_OFFSET[tz])))
 
 
+_SCORE_RE = re.compile(r"([\d.]+)\s*%")
+
+
+def done_from_score(cells):
+    """PrairieLearn has no submitted/graded flag of its own on this page -
+    the 4th column shows a percentage ("100%") once attempted, or a status
+    like "Not started"/"Not yet released" otherwise. A 100% score is one
+    heuristic for "nothing left to do here" (a lower score is still
+    improvable up until the assessment closes - see done_from_credit for the
+    other case, a closed assessment whose score never reached 100%)."""
+    if len(cells) < 4:
+        return None
+    m = _SCORE_RE.search(cells[3].get_text(strip=True))
+    return m is not None and float(m.group(1)) >= 100
+
+
+def done_from_credit(cells):
+    """Once an assessment's whole credit schedule has expired, the Available
+    Credit column (3rd) shows nothing at all - no popover, no "Available
+    <time>" notice - since there's nothing left that could still change the
+    score. Verified against a real UBC course: several closed assessments
+    show this with a score well under 100% (e.g. 66%, 80%, 85%), which
+    done_from_score alone would miss. A not-yet-open assessment always shows
+    an "Available <time>" message instead, so this never collides with that
+    case.
+
+    An empty credit cell alone isn't enough, though (PM review on #15/#71
+    found this live): PrairieLearn also shows an empty cell for an
+    assessment that still accepts 0%-credit "practice" submissions after its
+    last deadline (`afterLastDeadline.allowSubmissions=true, credit=0`) -
+    that's not finished, just not worth more points anymore. Require a
+    nonzero score too, so a never-attempted assessment in that state stays
+    visible instead of silently disappearing."""
+    if len(cells) < 4:
+        return False
+    credit_cell = cells[2]
+    if credit_cell.find("button") is not None or credit_cell.get_text(strip=True) != "":
+        return False
+    m = _SCORE_RE.search(cells[3].get_text(strip=True))
+    return m is not None and float(m.group(1)) > 0
+
+
 def to_item(row, course_code, group, ci_id):
     cells = row.select("td")
     link = cells[1].find("a")
@@ -112,6 +154,7 @@ def to_item(row, course_code, group, ci_id):
         due=due_from_popover(popover["data-bs-content"]) if popover else None,
         url=url,
         source="prairielearn",
+        done=bool(done_from_score(cells)) or done_from_credit(cells),
     )
 
 
