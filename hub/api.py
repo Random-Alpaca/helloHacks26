@@ -107,8 +107,17 @@ class Handler(BaseHTTPRequestHandler):
             self._connect(prairielearn.fetch)
         elif path == "/api/connect/prairielearn_ok":
             self._connect(lambda: prairielearn.fetch("prairielearn_ok"))
+        elif path == "/api/connect/prairielearn_custom":
+            domain = self._read_json_body().get("domain", "")
+            self._connect(lambda: prairielearn.fetch(domain))
         else:
             self._json({"error": "not found"}, status=404)
+
+    def _read_json_body(self):
+        length = int(self.headers.get("Content-Length", 0))
+        if length == 0:
+            return {}
+        return json.loads(self.rfile.read(length))
 
     def _connect(self, fetch_fn):
         """Opens a browser window for the student to sign in themselves

@@ -3,21 +3,25 @@ enrolled course's Assessments page for tasks/deadlines. No student-facing
 API exists (docs/api-standards.md), so this reads the same HTML a student
 sees, same as Canvas's browser-login path reads its JSON.
 
-Two UBC PrairieLearn deployments exist - the shared PrairieLearn SaaS most
-UBC Vancouver courses use (us.prairielearn.com), and UBC Okanagan's own
-self-hosted instance (prairielearn.ok.ubc.ca) for courses taught there (e.g.
-a student found their real MECH 260 assessments live there, not on the
-Vancouver instance). Same open-source PrairieLearn codebase either way, so
-the same scraping logic works against both - only the base URL and the
-login session differ, so a `campus` key threads through instead of a
-hardcoded site/base pair. Each campus gets its own saved session and its
-own `source` value, so items from one never collide with the other's.
+PrairieLearn is open-source and self-hostable by any department or
+instructor, not just one deployment per school - a real student's MECH 260
+assessments turned out to live on UBC Okanagan's own instance
+(prairielearn.ok.ubc.ca), not the shared PrairieLearn SaaS
+(us.prairielearn.com) their other courses used, and a search for "known UBC
+PrairieLearn domains" turned up a *second*, independent UBC Okanagan
+instance (pl.autoed.ok.ubc.ca, a single course's own AutoER tool) - so a
+hardcoded list can never be complete. `campus` accepts either a known short
+key (CAMPUSES) or a student-pasted "https://..." URL directly - see
+resolve_campus(). Same open-source PrairieLearn codebase either way, so the
+same scraping logic works against any of them - only the base URL and the
+login session differ. Each campus gets its own saved session and its own
+`source` value, so items from one never collide with another's.
 
 Verified against a real UBC Vancouver course (CPSC 317, 2026 Winter Term 1).
-# ponytail: prairielearn_ok hasn't been verified against a real login yet -
-# assumed identical markup since it's the same PrairieLearn codebase. Flag
-# here (and adjust CAMPUSES/parsing as needed) if a real UBC-O login shows
-# different HTML.
+# ponytail: prairielearn_ok, and any custom domain a student pastes in,
+# haven't been verified against a real login - assumed identical markup
+# since it's the same PrairieLearn codebase. Flag here if a real login
+# shows different HTML.
 
 Two real limitations, not guessed:
 - PrairieLearn has no single "due date" - each assessment has a multi-tier
@@ -31,6 +35,7 @@ Try it:  uv run python -m hub.prairielearn
 """
 import re
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
@@ -42,6 +47,26 @@ CAMPUSES = {
     "prairielearn_ok": "https://prairielearn.ok.ubc.ca",
 }
 DEFAULT_CAMPUS = "prairielearn"
+
+
+def resolve_campus(campus):
+    """A known short key resolves from CAMPUSES; anything else is treated as
+    a student-pasted PrairieLearn URL for an instance we don't have listed
+    (any department can self-host one - see module docstring). Returns
+    (campus_key, base_url); campus_key becomes both the saved-session
+    filename (hub.site.state_path) and the item source, so for a custom URL
+    it's the bare hostname, not the full URL (filesystem/identity-safe,
+    still stable across reconnects to the same instance).
+
+    Rejects anything that isn't a real https:// URL outright - this opens a
+    real login browser window at whatever's returned, so a typo or a
+    non-URL string must fail loudly here rather than reach Playwright."""
+    if campus in CAMPUSES:
+        return campus, CAMPUSES[campus]
+    parsed = urlparse(campus)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ValueError(f"not a valid https:// PrairieLearn URL: {campus!r}")
+    return parsed.netloc, f"https://{parsed.netloc}"
 
 # UBC courses only ever show Pacific time. Fixed offsets, not zoneinfo/pytz:
 # good enough while every course we've seen is UBC; add zones if that changes.
@@ -63,11 +88,12 @@ COURSE_TITLE = re.compile(r"([A-Z]+ ?\d+\w*):\s*(.+),\s*(\d{4} \w+ Term \d+)")
 
 def login(campus=DEFAULT_CAMPUS):
     """Open a visible browser; the student signs in (UBC CWL); we save the session."""
-    site.login(campus, CAMPUSES[campus])
+    key, base = resolve_campus(campus)
+    site.login(key, base)
 
 
-def _get_soup(req, path, campus):
-    r = req.get(f"{CAMPUSES[campus]}{path}")
+def _get_soup(req, path, base):
+    r = req.get(f"{base}{path}")
     if r.status == 401:
         raise site.NotLoggedIn
     if not r.ok:
@@ -101,7 +127,7 @@ def due_from_popover(popover_html):
     return datetime.fromisoformat(dt_str).replace(tzinfo=timezone(timedelta(hours=TZ_OFFSET.get(tz, 0))))
 
 
-def to_item(row, course_code, group, campus):
+def to_item(row, course_code, group, campus_key, base):
     cells = row.select("td")
     link = cells[1].find("a")
     popover = cells[2].find("button")
@@ -112,44 +138,46 @@ def to_item(row, course_code, group, campus):
         kind=kind,
         title=cells[1].get_text(strip=True),
         due=due_from_popover(popover["data-bs-content"]) if popover else None,
-        url=f"{CAMPUSES[campus]}{link['href']}" if link else "",
-        source=campus,
+        url=f"{base}{link['href']}" if link else "",
+        source=campus_key,
     )
 
 
-def _course_instances(req, campus):
+def _course_instances(req, base):
     """[(id, display title)] for every course on the student's home page."""
-    soup = _get_soup(req, "/", campus)
+    soup = _get_soup(req, "/", base)
     return [(a["href"].rsplit("/", 1)[1], a.get_text(strip=True))
             for a in soup.select("a[href^='/pl/course_instance/']")
             if a["href"].rstrip("/").count("/") == 3]
 
 
-def _assessments(req, ci_id, course_code, campus):
-    soup = _get_soup(req, f"/pl/course_instance/{ci_id}/assessments", campus)
+def _assessments(req, ci_id, course_code, campus_key, base):
+    soup = _get_soup(req, f"/pl/course_instance/{ci_id}/assessments", base)
     items, group = [], ""
     for row in soup.select("table tbody tr"):
         heading = row.find("th")
         if heading:
             group = heading.get_text(strip=True)
         else:
-            items.append(to_item(row, course_code, group, campus))
+            items.append(to_item(row, course_code, group, campus_key, base))
     return items
 
 
 def fetch(campus=DEFAULT_CAMPUS):
     """Return (courses, items) for every course on the student's PrairieLearn
-    home page, for the given campus. Opens a browser window to log in if
-    there's no saved session for that campus."""
-    return site.fetch_with_session(campus, CAMPUSES[campus], lambda req: _run(req, campus))
+    home page, for the given campus (a known CAMPUSES key, or a full
+    https://... URL - see resolve_campus()). Opens a browser window to log
+    in if there's no saved session for that campus."""
+    key, base = resolve_campus(campus)
+    return site.fetch_with_session(key, base, lambda req: _run(req, key, base))
 
 
-def _run(req, campus):
+def _run(req, campus_key, base):
     courses, items = [], []
-    for ci_id, title in _course_instances(req, campus):
+    for ci_id, title in _course_instances(req, base):
         course = to_course(ci_id, title)
         courses.append(course)
-        items += _assessments(req, ci_id, course.code, campus)
+        items += _assessments(req, ci_id, course.code, campus_key, base)
     return courses, items
 
 

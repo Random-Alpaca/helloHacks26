@@ -1,6 +1,7 @@
+import pytest
 from bs4 import BeautifulSoup
 
-from hub.prairielearn import due_from_popover, to_course, to_item
+from hub.prairielearn import due_from_popover, resolve_campus, to_course, to_item
 
 # Real markup captured from a live UBC PrairieLearn course (CPSC 317, 2026W1).
 OPEN_ROW = """
@@ -36,7 +37,7 @@ def row(html):
 
 
 def test_open_assessment_gets_due_from_100pct_tier_and_a_link():
-    i = to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn")
+    i = to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn", "https://us.prairielearn.com")
     assert (i.category, i.kind, i.title) == ("task", "assignment", "A Dictionary Client")
     assert i.due.isoformat() == "2026-09-27T23:59:59-07:00"  # PDT, timezone-aware like Canvas's due dates
     assert i.url == "https://us.prairielearn.com/pl/course_instance/221053/assessment_instance/14835025/"
@@ -45,19 +46,20 @@ def test_open_assessment_gets_due_from_100pct_tier_and_a_link():
 def test_due_is_never_naive():
     # A naive due here would crash any code that compares it against
     # datetime.now(timezone.utc) - e.g. Terrace's "Hide overdue" toggle.
-    i = to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn")
+    i = to_item(row(OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn", "https://us.prairielearn.com")
     assert i.due.tzinfo is not None
 
 
 def test_not_yet_open_assessment_has_no_due_or_link():
-    i = to_item(row(NOT_OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn")
+    i = to_item(row(NOT_OPEN_ROW), "CPSC 317", "Programming Assignments", "prairielearn", "https://us.prairielearn.com")
     assert i.due is None
     assert i.url == ""
 
 
 def test_group_heading_maps_quiz_and_exam():
-    assert to_item(row(OPEN_ROW), "CPSC 317", "Practice for Quizzes", "prairielearn").kind == "quiz"
-    assert to_item(row(OPEN_ROW), "CPSC 317", "Formal Quizzes (repeated for practice)", "prairielearn").kind == "exam"
+    base = "https://us.prairielearn.com"
+    assert to_item(row(OPEN_ROW), "CPSC 317", "Practice for Quizzes", "prairielearn", base).kind == "quiz"
+    assert to_item(row(OPEN_ROW), "CPSC 317", "Formal Quizzes (repeated for practice)", "prairielearn", base).kind == "exam"
 
 
 def test_last_tier_with_no_end_date_is_none():
@@ -74,6 +76,33 @@ def test_okanagan_campus_gets_its_own_base_url_and_source():
     # own PrairieLearn instance, not the shared us.prairielearn.com one -
     # each campus needs its own base URL and its own `source`, so the two
     # never collide under the same (source, url) identity.
-    i = to_item(row(OPEN_ROW), "MECH 260", "Programming Assignments", "prairielearn_ok")
+    i = to_item(row(OPEN_ROW), "MECH 260", "Programming Assignments", "prairielearn_ok", "https://prairielearn.ok.ubc.ca")
     assert i.source == "prairielearn_ok"
     assert i.url == "https://prairielearn.ok.ubc.ca/pl/course_instance/221053/assessment_instance/14835025/"
+
+
+def test_resolve_campus_known_key():
+    assert resolve_campus("prairielearn_ok") == ("prairielearn_ok", "https://prairielearn.ok.ubc.ca")
+
+
+def test_resolve_campus_accepts_a_pasted_url_for_an_unlisted_instance():
+    # Any department can self-host their own PrairieLearn (a second, distinct
+    # UBC Okanagan instance turned up in the same search that found the
+    # first one) - a hardcoded list can never be complete, so a full URL
+    # works even when it's not one of the known CAMPUSES keys.
+    key, base = resolve_campus("https://pl.autoed.ok.ubc.ca")
+    assert (key, base) == ("pl.autoed.ok.ubc.ca", "https://pl.autoed.ok.ubc.ca")
+
+
+def test_resolve_campus_strips_a_path_down_to_just_the_host():
+    # A student pasting the login page URL rather than the bare domain
+    # shouldn't produce a broken/duplicated base.
+    assert resolve_campus("https://pl.autoed.ok.ubc.ca/pl/login") == ("pl.autoed.ok.ubc.ca", "https://pl.autoed.ok.ubc.ca")
+
+
+@pytest.mark.parametrize("bad", ["http://pl.autoed.ok.ubc.ca", "not a url", "javascript:alert(1)", ""])
+def test_resolve_campus_rejects_anything_that_isnt_a_real_https_url(bad):
+    # This opens a real login browser window at whatever's returned - a typo
+    # or a non-URL string must fail loudly here, not reach Playwright.
+    with pytest.raises(ValueError):
+        resolve_campus(bad)
