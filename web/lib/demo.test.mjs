@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fetchDemo, fetchUpcoming, fetchCourses, resetDemoCache } from "./hub.js";
+import { fetchDemo, fetchDemoMeetings, fetchUpcoming, fetchCourses, resetDemoCache } from "./hub.js";
 
 const demoBody = {
   demo: true,
   items: [{ course: "CPSC 110", category: "task", kind: "assignment", title: "Problem Set 4", due: "2026-09-29T06:59:00+00:00", url: "https://canvas.ubc.ca/courses/1001/assignments/5001", source: "canvas", done: false, status: "soon", urgency: "medium" }],
   announcements: [],
   courses: [{ code: "CPSC 110", term: "2026W1", title: "Intro to Program Design (Demo)", grade: 86.4 }],
+  schedule: [{ course: "CPSC 110", kind: "lab", days: ["MO"], start_time: "14:00", end_time: "16:00", location: "Demo Computing Lab", term_start: "2026-08-25", term_end: "2026-11-20", source: "workday" }],
 };
 
 test("fetchDemo: uses /api/demo rows when it answers", async () => {
@@ -39,6 +40,22 @@ test("fetchUpcoming/fetchCourses (hosted Sample mode): fall back to built-in sam
     assert.ok(items.every((i) => i.source === undefined)); // the hardcoded SAMPLE_ROWS
     const courses = await fetchCourses(true);
     assert.ok(courses.length > 0);
+  } finally {
+    globalThis.fetch = realFetch;
+    resetDemoCache();
+  }
+});
+
+test("fetchDemoMeetings: /api/demo's schedule rows in the Workday-import shape, Sample mode only", async () => {
+  resetDemoCache();
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => demoBody });
+  try {
+    assert.deepEqual(await fetchDemoMeetings(true), [{
+      course: "CPSC 110", kind: "lab", days: ["MO"], startTime: "14:00", endTime: "16:00",
+      location: "Demo Computing Lab", termStart: "2026-08-25", termEnd: "2026-11-20", source: "workday",
+    }]);
+    assert.deepEqual(await fetchDemoMeetings(false), []); // Sample off: nothing fake
   } finally {
     globalThis.fetch = realFetch;
     resetDemoCache();
