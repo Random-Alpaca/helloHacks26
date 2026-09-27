@@ -57,12 +57,22 @@ def _upcoming(conn):
 
 
 def _announcements(conn):
-    """Undated items (announcements, and anything else without a real
-    deadline) - already most-recent-first from db.undated(). No urgency
-    ranking here, unlike _upcoming(): sort_items() needs a due date to rank
-    by, and these don't have one."""
+    """Real announcements only - already most-recent-first from db.undated().
+    No urgency ranking here, unlike _upcoming(): sort_items() needs a due date
+    to rank by, and announcements don't have one.
+
+    db.undated() is every item with no due date, not just announcements - an
+    undated Canvas assignment (hub/canvas.py's to_undated_item, #43) or an
+    unopened PrairieLearn assessment has no due date either, and used to leak
+    into this feed looking like an announcement. Filter to kind="announcement"
+    here rather than in db.undated() itself, which other undated items may
+    still want to read from later.
+    # ponytail: an undated task/deadline has nowhere to surface at all right
+    # now (it's excluded here, and _upcoming() requires a due date) - fine
+    # until something asks for an "undated tasks" list of its own.
+    """
     now = datetime.now(timezone.utc)
-    return [_row_to_dict(r, now) for r in db.undated(conn)]
+    return [_row_to_dict(r, now) for r in db.undated(conn) if r[2] == "announcement"]
 
 
 class Handler(BaseHTTPRequestHandler):
