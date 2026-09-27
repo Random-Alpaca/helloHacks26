@@ -14,6 +14,7 @@ import {
   isOverdue,
   mergeCourses,
   selectActiveItems,
+  selectConnections,
   selectCourseItems,
   selectNextUp,
   selectVisibleItems,
@@ -33,6 +34,7 @@ function Icon({ name, className = "size-5" }) {
     arrow: <><path d="M5 12h14M13 6l6 6-6 6" /></>,
     menu: <><path d="M4 7h16M4 12h16M4 17h16" /></>,
     spark: <><path d="m12 3 1.3 4.2L17 9l-3.7 1.8L12 15l-1.3-4.2L7 9l3.7-1.8L12 3Z" /><path d="m5 14 .7 2.3L8 17l-2.3.7L5 20l-.7-2.3L2 17l2.3-.7L5 14Z" /></>,
+    settings: <><path d="M4 6h10M18 6h2M4 18h10M18 18h2M4 12h4M12 12h8" /><circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="16" cy="18" r="2" /></>,
   };
   return <svg aria-hidden="true" className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>;
 }
@@ -46,6 +48,7 @@ const NAV_ITEMS = [
   { label: "Assignments", icon: "tasks", tab: "task" },
   { label: "Calendar", icon: "calendar", tab: "deadline" },
   { label: "Courses", icon: "courses", tab: "courses" },
+  { label: "Settings", icon: "settings", tab: "settings" },
 ];
 
 const THEMES = [
@@ -53,6 +56,17 @@ const THEMES = [
   { id: "solarized", label: "Solarized" },
   { id: "gruvbox", label: "Gruvbox" },
   { id: "catppuccin", label: "Catppuccin" },
+];
+
+// Everforest's own values - what a freshly-picked "Custom" scheme starts
+// from, so switching to it doesn't jump to something jarring before the
+// student has changed anything.
+const DEFAULT_CUSTOM_COLORS = { page: "#f3ead3", surface: "#fdf6e3", ink: "#2d353b", accent: "#3a6b52" };
+const CUSTOM_COLOR_FIELDS = [
+  { key: "page", label: "Background" },
+  { key: "surface", label: "Cards" },
+  { key: "ink", label: "Text" },
+  { key: "accent", label: "Accent" },
 ];
 
 const WEEKDAY_LETTERS = ["M", "T", "W", "T", "F", "S", "S"];
@@ -121,6 +135,74 @@ function QuickActions({ sampleMode, onSampleModeChange, onConnected, onWorkdayIm
   );
 }
 
+function SettingsPage({ theme, setTheme, customColors, setCustomColors, connections }) {
+  return (
+    <div className="max-w-2xl space-y-6">
+      <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
+        <div className="mb-1 text-xl font-bold tracking-tight">Appearance</div>
+        <div className="mb-5 text-sm text-[var(--muted)]">Pick a color scheme, or build your own.</div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {THEMES.map((option) => (
+            <AppButton key={option.id} ariaLabel={`Use ${option.label} theme`} onClick={() => setTheme(option.id)} className={`theme-option ${theme === option.id ? "theme-option-active" : ""}`}>
+              <span className="flex gap-1">
+                {[1, 2, 3].map((swatch) => <span key={swatch} className={`theme-swatch swatch-${option.id}-${swatch}`} />)}
+              </span>
+              <span className="mt-1.5 block truncate text-[0.65rem] font-bold">{option.label}</span>
+            </AppButton>
+          ))}
+          <AppButton ariaLabel="Use a custom color scheme" onClick={() => setTheme("custom")} className={`theme-option ${theme === "custom" ? "theme-option-active" : ""}`}>
+            <span className="flex gap-1">
+              {[customColors.accent, customColors.page, customColors.surface].map((color, i) => (
+                <span key={i} className="theme-swatch" style={{ background: color }} />
+              ))}
+            </span>
+            <span className="mt-1.5 block truncate text-[0.65rem] font-bold">Custom</span>
+          </AppButton>
+        </div>
+
+        {theme === "custom" && (
+          <div className="mt-5 grid grid-cols-2 gap-4 border-t border-[var(--line)] pt-5 sm:grid-cols-4">
+            {CUSTOM_COLOR_FIELDS.map((field) => (
+              <label key={field.key} className="flex flex-col gap-1.5 text-xs font-bold text-[var(--muted)]">
+                {field.label}
+                <input
+                  type="color"
+                  value={customColors[field.key]}
+                  onChange={(e) => setCustomColors({ ...customColors, [field.key]: e.target.value })}
+                  className="h-9 w-full cursor-pointer rounded-md border border-[var(--line)] bg-transparent p-0.5"
+                />
+              </label>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-6 shadow-[var(--shadow-card)]">
+        <div className="mb-1 text-xl font-bold tracking-tight">Connections</div>
+        <div className="mb-5 text-sm text-[var(--muted)]">
+          {isLocalMode()
+            ? "What's actually feeding your dashboard right now."
+            : "This is the hosted demo, so Canvas and PrairieLearn can't connect here - run Hub locally to link a real account (see the README)."}
+        </div>
+        <div className="divide-y divide-[var(--line)]">
+          {connections.map((c) => (
+            <div key={c.id} className="flex items-center justify-between py-3">
+              <div className="flex items-center gap-3">
+                <span className={`size-2.5 rounded-full ${c.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+                <span className="font-bold">{c.label}</span>
+              </div>
+              <div className="text-right text-sm">
+                <div className={c.connected ? "font-bold text-[var(--success)]" : "text-[var(--muted)]"}>{c.connected ? "Connected" : "Not connected"}</div>
+                <div className="text-xs text-[var(--muted)]">{c.detail}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export default function App() {
   const [activeNav, setActiveNav] = useState("Overview");
   const [activeFilter, setActiveFilter] = useState("All");
@@ -129,6 +211,7 @@ export default function App() {
   const [hideOverdue, setHideOverdue] = useState(false);
   const [showN, setShowN] = useState(10);
   const [theme, setTheme] = useState("everforest");
+  const [customColors, setCustomColors] = useState(DEFAULT_CUSTOM_COLORS);
 
   const [sampleMode, setSampleMode] = useState(true);
   const [items, setItems] = useState([]);
@@ -138,11 +221,20 @@ export default function App() {
 
   useEffect(() => {
     setTheme(localStorage.getItem("gather-theme") || "everforest");
+    try {
+      const saved = JSON.parse(localStorage.getItem("gather-custom-colors"));
+      if (saved) setCustomColors(saved);
+    } catch {
+      // ignore malformed/missing storage - keep the default
+    }
   }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("gather-theme", theme);
   }, [theme]);
+  useEffect(() => {
+    localStorage.setItem("gather-custom-colors", JSON.stringify(customColors));
+  }, [customColors]);
 
   async function load(useSample) {
     try {
@@ -189,9 +281,14 @@ export default function App() {
   const visible = selectVisibleItems(filteredByCourse, { tab: activeNavTab, hideOverdue, showN, now });
   const nextUp = selectNextUp(activeItems);
   const days = weekDates(now);
+  const connections = selectConnections(items, importedCourses);
+
+  const customStyle = theme === "custom"
+    ? { "--page": customColors.page, "--surface": customColors.surface, "--ink": customColors.ink, "--accent": customColors.accent }
+    : undefined;
 
   return (
-    <div data-theme={theme} className="min-h-screen bg-[var(--page)] text-[var(--ink)]">
+    <div data-theme={theme} style={customStyle} className="min-h-screen bg-[var(--page)] text-[var(--ink)]">
       <aside className={`sidebar ${mobileNav ? "sidebar-open" : ""}`}>
         <div className="flex h-full flex-col overflow-y-auto">
           <div className="flex items-center gap-3 px-6 py-7">
@@ -219,20 +316,6 @@ export default function App() {
               </AppButton>
             ))}
           </div>
-
-          <div className="mt-auto px-5 pb-5">
-            <div className="mb-3 text-xs font-bold uppercase tracking-widest text-[var(--muted)]">Color scheme</div>
-            <div className="grid grid-cols-2 gap-2">
-              {THEMES.map((option) => (
-                <AppButton key={option.id} ariaLabel={`Use ${option.label} theme`} onClick={() => setTheme(option.id)} className={`theme-option ${theme === option.id ? "theme-option-active" : ""}`}>
-                  <span className="flex gap-1">
-                    {[1, 2, 3].map((swatch) => <span key={swatch} className={`theme-swatch swatch-${option.id}-${swatch}`} />)}
-                  </span>
-                  <span className="mt-1.5 block truncate text-[0.65rem] font-bold">{option.label}</span>
-                </AppButton>
-              ))}
-            </div>
-          </div>
         </div>
       </aside>
 
@@ -248,6 +331,10 @@ export default function App() {
         </header>
 
         <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8 lg:px-10 lg:py-10">
+          {activeNav === "Settings" ? (
+            <SettingsPage theme={theme} setTheme={setTheme} customColors={customColors} setCustomColors={setCustomColors} connections={connections} />
+          ) : (
+          <>
           <section className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
             <div>
               <div className="mb-2 flex items-center gap-2 text-sm font-bold text-[var(--accent)]">
@@ -406,6 +493,8 @@ export default function App() {
               />
             </aside>
           </div>
+          </>
+          )}
         </div>
       </main>
     </div>

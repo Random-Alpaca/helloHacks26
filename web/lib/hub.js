@@ -73,6 +73,7 @@ function normaliseApiItem(row, i) {
     title: row.title,
     due: row.due,
     url: row.url,
+    source: row.source,
     done: row.done ?? null,
     urgency: row.urgency ?? undefined,
     status: row.status ?? undefined,
@@ -235,4 +236,18 @@ export function hasItemDueOn(items, date) {
 
 function sameDay(a, b) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+// What Settings' Connections list needs: one row per known provider, derived
+// from the data actually on hand rather than a separately-tracked "connected"
+// flag (sample data never sets item.source, so it correctly shows as
+// disconnected everywhere). Workday isn't a login - it's a file the student
+// already has - so "connected" means "imported this session", not "logged in".
+export function selectConnections(items, importedCourses) {
+  const countBySource = (source) => items.filter((item) => item.source === source).length;
+  return [
+    { id: "canvas", label: "Canvas", connected: countBySource("canvas") > 0, detail: `${countBySource("canvas")} item${countBySource("canvas") === 1 ? "" : "s"}` },
+    { id: "prairielearn", label: "PrairieLearn", connected: countBySource("prairielearn") > 0, detail: `${countBySource("prairielearn")} item${countBySource("prairielearn") === 1 ? "" : "s"}` },
+    { id: "workday", label: "Workday", connected: importedCourses.length > 0, detail: `${importedCourses.length} course${importedCourses.length === 1 ? "" : "s"} imported` },
+  ];
 }
