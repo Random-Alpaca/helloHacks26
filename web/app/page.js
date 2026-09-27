@@ -671,7 +671,7 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
           {!isLocalMode() && (
             <>
               <pre className="overflow-x-auto rounded-md bg-[var(--surface)] p-3 text-[0.7rem] leading-relaxed">
-{`curl -fsSL https://raw.githubusercontent.com/Random-Alpaca/helloHacks26/main/tools/sync.sh | bash`}
+{`curl -fsSL https://raw.githubusercontent.com/terraceonhigh/helloHacks26/main/tools/sync.sh | bash`}
               </pre>
               <div className="mt-2 text-[0.7rem] text-[var(--muted)]">
                 Opens a browser window per provider for you to log into, scans Canvas and PrairieLearn, then prints a sync key - paste that into "Paste your hub sync key" above to see it here, same as the extension.

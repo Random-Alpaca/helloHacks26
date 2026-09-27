@@ -6,7 +6,7 @@
 # Usage: curl -fsSL <raw-url-to-this-file> | bash
 set -euo pipefail
 
-REPO="${HUB_SYNC_REPO:-Random-Alpaca/helloHacks26}"
+REPO="${HUB_SYNC_REPO:-terraceonhigh/helloHacks26}"
 BRANCH="${HUB_SYNC_BRANCH:-main}"
 RAW="https://raw.githubusercontent.com/$REPO/$BRANCH"
 DIR="$(mktemp -d)/ubc-hub-sync"
