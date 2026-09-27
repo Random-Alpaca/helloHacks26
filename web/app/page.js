@@ -1038,9 +1038,10 @@ export default function App() {
             <AppButton
               ariaLabel="Settings"
               onClick={() => { setActiveNav("Settings"); setMobileNav(false); }}
-              className={`icon-button ${activeNav === "Settings" ? "nav-item-active" : ""}`}
+              className={`icon-button gap-1.5 px-2 ${activeNav === "Settings" ? "nav-item-active" : ""}`}
             >
               <Icon name="settings" className="size-4" />
+              <span className="text-xs font-bold">Settings</span>
             </AppButton>
           </div>
         </div>
