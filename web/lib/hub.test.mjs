@@ -6,7 +6,7 @@ test("selectConnections: no data means nothing is connected", () => {
   const connections = selectConnections([], []);
   assert.deepEqual(
     connections.map((c) => c.connected),
-    [false, false, false, false],
+    [false, false, false, false, false],
   );
 });
 
@@ -21,7 +21,16 @@ test("selectConnections: source-tagged items mark that provider connected, other
   assert.equal(byId.canvas.connected, true);
   assert.equal(byId.canvas.detail, "2 items");
   assert.equal(byId.prairielearn.connected, false);
+  assert.equal(byId.webwork.connected, false);
   assert.equal(byId.workday.connected, false);
+});
+
+test("selectConnections: WeBWorK items mark it connected the same way Canvas/PrairieLearn items do", () => {
+  const items = [{ source: "webwork" }, { source: "webwork" }, { source: "webwork" }];
+  const connections = selectConnections(items, []);
+  const byId = Object.fromEntries(connections.map((c) => [c.id, c]));
+  assert.equal(byId.webwork.connected, true);
+  assert.equal(byId.webwork.detail, "3 items");
 });
 
 test("selectConnections: loaded Workday meetings count as connected regardless of items", () => {

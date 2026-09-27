@@ -200,6 +200,43 @@ export async function connectPrairieLearnCustom(domain) {
   return body;
 }
 
+// Brightspace is multi-tenant (hub/brightspace.py) - every institution runs
+// its own subdomain, so there's no single quick-connect button; the student
+// pastes their own institution's Brightspace URL, same shape as
+// connectPrairieLearnCustom above. Real courses only - hub/brightspace.py's
+// fetch() always returns an empty item list today (no plain JSON due-date
+// endpoint was found live), explained in its own module docstring.
+export async function connectBrightspace(base) {
+  const apiBaseUrl = apiBase();
+  if (!apiBaseUrl) throw new Error("connectBrightspace() only works in local mode");
+  const res = await fetch(`${apiBaseUrl}/api/connect/brightspace`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ base }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `POST /api/connect/brightspace failed: ${res.status}`);
+  return body;
+}
+
+// WeBWorK (hub/webwork.py) has no student-facing course-catalogue join key
+// on its own problem-set page, so the student supplies both their course's
+// WeBWorK URL and its course code (to match against the same course from
+// Canvas/Workday) - the backend builds the Course record itself from
+// course_code, matching hub/webwork.py's own __main__ block.
+export async function connectWebWork(base, courseCode) {
+  const apiBaseUrl = apiBase();
+  if (!apiBaseUrl) throw new Error("connectWebWork() only works in local mode");
+  const res = await fetch(`${apiBaseUrl}/api/connect/webwork`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ base, course_code: courseCode }),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || `POST /api/connect/webwork failed: ${res.status}`);
+  return body;
+}
+
 // Sort by urgency (matches hub.logic.sort_items's order) when the backend
 // (or sample data) provides it; items without it yet (API not upgraded)
 // fall back to due-date order rather than a guessed urgency.
@@ -499,6 +536,7 @@ const KNOWN_PROVIDERS = [
   { id: "canvas", label: "Canvas" },
   { id: "prairielearn", label: "PrairieLearn" },
   { id: "prairielearn_ok", label: "PrairieLearn (Okanagan)" },
+  { id: "webwork", label: "WeBWorK" },
 ];
 
 function countOf(n, noun) {

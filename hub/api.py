@@ -16,9 +16,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
-from hub import canvas, db, ics, prairielearn
+from hub import brightspace, canvas, db, ics, prairielearn, webwork
 from hub.logic import sort_items
-from hub.models import Item, classify_urgency, status_of
+from hub.models import Course, Item, classify_urgency, status_of
 
 UI_DIR = Path(__file__).parent.parent / "ui"
 
@@ -157,6 +157,10 @@ class Handler(BaseHTTPRequestHandler):
             self._connect(canvas.fetch)
         elif path == "/api/connect/prairielearn":
             self._connect(prairielearn.fetch)
+        elif path == "/api/connect/brightspace":
+            self._connect_brightspace()
+        elif path == "/api/connect/webwork":
+            self._connect_webwork()
         elif path == "/api/feed":
             self._feed()
         else:
@@ -202,6 +206,42 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": str(e)}, status=502)
         now = datetime.now(timezone.utc)
         self._json([ics.to_dict(i, now) for i in items])
+
+    def _require_https_base(self, base):
+        """Brightspace and WeBWorK are both multi-tenant - the student pastes
+        their own institution's URL, and this opens a real login browser
+        window at whatever comes back. Same trust model as
+        hub/prairielearn.py's resolve_campus(): reject anything that isn't a
+        real https:// URL outright, rather than let a typo or a non-URL
+        string reach Playwright.
+        # ponytail: this is the minimal check (https + non-empty host), not
+        # resolve_campus()'s full userinfo/IP-literal/localhost hardening -
+        # worth porting here too before this leaves local-only demo use."""
+        parsed = urlparse(base)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError(f"not a valid https:// URL: {base!r}")
+
+    def _connect_brightspace(self):
+        try:
+            base = self._read_json_body().get("base", "")
+            self._require_https_base(base)
+        except ValueError as e:
+            return self._json({"ok": False, "error": str(e)}, status=400)
+        self._connect(lambda: brightspace.fetch(base))
+
+    def _connect_webwork(self):
+        try:
+            body = self._read_json_body()
+            base, course_code = body.get("base", ""), body.get("course_code", "")
+            self._require_https_base(base)
+        except ValueError as e:
+            return self._json({"ok": False, "error": str(e)}, status=400)
+        if not course_code:
+            return self._json({"ok": False, "error": "a course code is required"}, status=400)
+        # hub/webwork.py's fetch() returns items only (no catalogue join key
+        # on its own page) - build the Course record here ourselves, same as
+        # its own __main__ block does.
+        self._connect(lambda: ([Course(code=course_code, section="", term="", title=course_code)], webwork.fetch(base, course_code)))
 
     def _connect(self, fetch_fn):
         """Opens a browser window for the student to sign in themselves

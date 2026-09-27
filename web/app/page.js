@@ -2,10 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  connectBrightspace,
   connectCanvas,
   connectPrairieLearn,
   connectPrairieLearnCustom,
   connectPrairieLearnOk,
+  connectWebWork,
   displayLabel,
   fetchAnnouncements,
   fetchCanvasFeed,
@@ -265,10 +267,20 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
   const [workdayStatus, setWorkdayStatus] = useState(null);
   const [customDomain, setCustomDomain] = useState("");
   const [feedUrlInput, setFeedUrlInput] = useState("");
+  const [brightspaceUrl, setBrightspaceUrl] = useState("");
+  // hub/brightspace.py's fetch() never returns items (no plain JSON due-date
+  // endpoint was found live - see its module docstring), so unlike every
+  // other provider here, selectConnections' item-count-based "connected"
+  // signal can't represent it truthfully. Track a successful connect's own
+  // course count directly instead - ephemeral (resets on reload), same
+  // spirit as workdayStatus above.
+  const [brightspaceCourseCount, setBrightspaceCourseCount] = useState(null);
+  const [webworkUrl, setWebworkUrl] = useState("");
+  const [webworkCourseCode, setWebworkCourseCode] = useState("");
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
   const byId = Object.fromEntries(connections.map((c) => [c.id, c]));
-  const FIXED_IDS = new Set(["canvas", "prairielearn", "prairielearn_ok", "workday"]);
+  const FIXED_IDS = new Set(["canvas", "prairielearn", "prairielearn_ok", "webwork", "workday"]);
   const customConnections = connections.filter((c) => !FIXED_IDS.has(c.id));
 
   async function handleFile(e) {
@@ -521,6 +533,75 @@ function SettingsPage({ theme, setTheme, customColors, setCustomColors, connecti
               </div>
             </div>
           )}
+
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className={`size-2.5 rounded-full ${byId.webwork.connected ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div>
+                <div className="font-bold">WeBWorK</div>
+                <div className="text-xs text-[var(--muted)]">{byId.webwork.connected ? "Connected" : "Not connected"} &middot; {byId.webwork.detail}</div>
+              </div>
+            </div>
+            {isLocalMode() && !sampleMode && (
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={webworkUrl}
+                  onChange={(e) => setWebworkUrl(e.target.value)}
+                  placeholder="https://webwork.example.edu/webwork2/math101"
+                  aria-label="WeBWorK course URL"
+                  className="w-56 rounded-md border border-[var(--line)] bg-[var(--surface-soft)] px-2 py-1 text-xs"
+                />
+                <input
+                  type="text"
+                  value={webworkCourseCode}
+                  onChange={(e) => setWebworkCourseCode(e.target.value)}
+                  placeholder="MATH 100"
+                  aria-label="WeBWorK course code"
+                  size={9}
+                  className="rounded-md border border-[var(--line)] bg-[var(--surface-soft)] px-2 py-1 text-xs"
+                />
+                <AppButton
+                  disabled={busy !== null || !webworkUrl || !webworkCourseCode}
+                  onClick={() => run("webwork", () => connectWebWork(webworkUrl, webworkCourseCode))}
+                  className="toggle-pill"
+                >
+                  {busy === "webwork" ? "Signing in…" : byId.webwork.connected ? "Reconnect" : "Connect"}
+                </AppButton>
+              </div>
+            )}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+            <div className="flex items-center gap-3">
+              <span className={`size-2.5 rounded-full ${brightspaceCourseCount > 0 ? "bg-[var(--success)]" : "bg-[var(--muted-light)]"}`} />
+              <div>
+                <div className="font-bold">Brightspace</div>
+                <div className="text-xs text-[var(--muted)]">
+                  {brightspaceCourseCount > 0 ? `Connected · ${brightspaceCourseCount} course${brightspaceCourseCount === 1 ? "" : "s"}` : "Not connected · courses only, no due dates yet"}
+                </div>
+              </div>
+            </div>
+            {isLocalMode() && !sampleMode && (
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={brightspaceUrl}
+                  onChange={(e) => setBrightspaceUrl(e.target.value)}
+                  placeholder="https://ubc.brightspace.com"
+                  aria-label="Brightspace URL"
+                  className="w-56 rounded-md border border-[var(--line)] bg-[var(--surface-soft)] px-2 py-1 text-xs"
+                />
+                <AppButton
+                  disabled={busy !== null || !brightspaceUrl}
+                  onClick={() => run("brightspace", async () => setBrightspaceCourseCount((await connectBrightspace(brightspaceUrl)).courses))}
+                  className="toggle-pill"
+                >
+                  {busy === "brightspace" ? "Signing in…" : brightspaceCourseCount > 0 ? "Reconnect" : "Connect"}
+                </AppButton>
+              </div>
+            )}
+          </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3 py-3">
             <div className="flex items-center gap-3">
