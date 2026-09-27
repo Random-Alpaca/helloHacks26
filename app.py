@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import streamlit as st
 
-from hub import canvas, db, key_dates, prairielearn
+from hub import canvas, db, export_ics, key_dates, prairielearn
 from hub.logic import sort_items
 from hub.models import Course, Item, category_for, classify_urgency, status_of
 
@@ -84,3 +84,16 @@ def _workday_dialog():
 st.divider()
 if st.button("Connect Workday", help="Not implemented yet - opens a placeholder"):
     _workday_dialog()
+
+# #18: one merged .ics feed a student can drop straight into Apple/Google/
+# Outlook Calendar - the cheapest way into a routine they already have.
+_export_items = [
+    Item(course=r[0], category=r[1], kind=r[2], title=r[3],
+         due=datetime.fromisoformat(r[4]), url=r[5], source=r[7])
+    for r in db.upcoming(conn)
+]
+st.download_button(
+    "Add to my calendar", data=export_ics.to_ics(_export_items),
+    file_name="ubc-hub.ics", mime="text/calendar",
+    help="One .ics file with every upcoming item - subscribe to it in Apple/Google/Outlook Calendar.",
+)
